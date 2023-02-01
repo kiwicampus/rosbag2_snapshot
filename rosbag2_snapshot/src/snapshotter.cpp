@@ -568,8 +568,13 @@ void Snapshotter::triggerSnapshotCb(
       this->resume();
     }
   );
-
-  rosbag2_cpp::Writer bag_writer{};
+  
+  rosbag2_compression::CompressionOptions compresion_options;
+  compresion_options.compression_mode = rosbag2_compression::CompressionMode::FILE;
+  compresion_options.compression_format = "zstd";
+  std::unique_ptr<rosbag2_compression::SequentialCompressionWriter> bag_writer_impl = std::make_unique<rosbag2_compression::SequentialCompressionWriter>(compresion_options);
+  rosbag2_cpp::Writer bag_writer(std::move(bag_writer_impl));
+  
 
   try {
     bag_writer.open(req->filename);
@@ -611,7 +616,7 @@ void Snapshotter::triggerSnapshotCb(
       }
     }
   }
-
+  usleep(100e3); // for some weird reason some time is needed in order for the compression to work
   /*
   // If no topics were subscribed/valid/contained data, this is considered a non-success
   if (!bag.isOpen()) {

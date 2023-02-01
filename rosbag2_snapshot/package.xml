@@ -12,6 +12,8 @@
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_compression</depend>
+  <depend>rosbag2_compression_zstd</depend>
   <depend>rosbag2_snapshot_msgs</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>

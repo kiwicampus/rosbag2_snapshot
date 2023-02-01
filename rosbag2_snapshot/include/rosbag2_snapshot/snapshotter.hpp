@@ -35,6 +35,7 @@
 #include <rosbag2_snapshot_msgs/srv/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>
+#include <rosbag2_compression/sequential_compression_writer.hpp>
 
 #include <chrono>
 #include <deque>

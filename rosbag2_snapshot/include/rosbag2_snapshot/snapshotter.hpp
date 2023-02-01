@@ -53,6 +53,7 @@ struct TopicDetails
 {
   std::string name;
   std::string type;
+  rclcpp::QoS qos = rclcpp::QoS(5);
 
   TopicDetails() {}
 
@@ -82,6 +83,14 @@ struct TopicDetails
     return msg;
   }
 };
+
+const rclcpp::QoS qos_string_to_qos(std::string str)
+{
+    if (str == "DEFAULT") return rclcpp::QoS(5);
+    if (str == "SENSOR_DATA") return rclcpp::QoS(5).best_effort();
+    if (str == "TRANSIENT_LOCAL") return rclcpp::QoS(5).durability(rclcpp::DurabilityPolicy::TransientLocal);
+    throw std::runtime_error("Unknown QoS string " + str);
+}
 
 class Snapshotter;
 
@@ -197,6 +206,8 @@ public:
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const & msg) const;
+
+  bool refreshBuffer(rclcpp::Time const& time);
 
 private:
   // Internal push whitch does not obtain lock

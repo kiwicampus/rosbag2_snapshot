@@ -172,7 +172,24 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
   }
   return true;
 }
-void MessageQueue::push(SnapshotMessage const & _out)
+bool MessageQueue::refreshBuffer(rclcpp::Time const& time)
+{
+  if (options_.duration_limit_ > SnapshotterTopicOptions::NO_DURATION_LIMIT && queue_.size() != 0)
+  {
+    rclcpp::Duration dt = time - queue_.front().time;
+    while (dt > options_.duration_limit_)
+    {
+      _pop();
+      if (queue_.empty())
+      {
+          break;
+      }
+      dt = time - queue_.front().time;
+    }
+  }
+  return true;
+}
+void MessageQueue::push(SnapshotMessage const& _out)
 {
   auto ret = lock.try_lock();
   if (!ret) {
@@ -255,6 +272,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     TopicDetails details{};
     details.name = topic;
     details.type = type;
+    details.qos = pair.first.qos;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -326,6 +344,7 @@ void Snapshotter::parseOptionsFromParams()
       std::string prefix = "topic_details." + topic;
       std::string topic_type{};
       SnapshotterTopicOptions opts{};
+      std::string topic_qos{};
 
       try {
         topic_type = declare_parameter<std::string>(prefix + ".type");
@@ -339,6 +358,26 @@ void Snapshotter::parseOptionsFromParams()
         throw ex;
       }
 
+      try
+      {
+        topic_qos = declare_parameter<std::string>(prefix + ".qos");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        if (std::string{ex.what()}.find("not set") == std::string::npos)
+        {
+          RCLCPP_WARN(get_logger(), "Qos not defined for topic %s, using defaul qos", topic.c_str());
+        }
+        topic_qos = "DEFAULT";
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        if (std::string{ex.what()}.find("not set") == std::string::npos)
+        {
+          RCLCPP_WARN(get_logger(), "Qos not defined for topic %s, using defaul qos", topic.c_str());
+        }
+        topic_qos = "DEFAULT";
+      }
+  
       try {
         opts.duration_limit_ = rclcpp::Duration::from_seconds(
           declare_parameter<double>(prefix + ".duration")
@@ -364,6 +403,7 @@ void Snapshotter::parseOptionsFromParams()
       TopicDetails dets{};
       dets.name = topic;
       dets.type = topic_type;
+      dets.qos = qos_string_to_qos(topic_qos);
 
       options_.topics_.insert(
         SnapshotterOptions::topics_t::value_type(dets, opts));
@@ -436,7 +476,7 @@ void Snapshotter::subscribe(
   auto sub = create_generic_subscription(
     topic_details.name,
     topic_details.type,
-    rclcpp::QoS{10},
+    topic_details.qos,
     std::bind(&Snapshotter::topicCb, this, _1, queue),
     opts
   );
@@ -563,6 +603,7 @@ void Snapshotter::triggerSnapshotCb(
   } else {  // If topic list empty, record all buffered topics
     for (const buffers_t::value_type & pair : buffers_) {
       MessageQueue & message_queue = *(pair.second);
+      message_queue.refreshBuffer(now());
       if (!writeTopic(bag_writer, message_queue, pair.first, req, res)) {
         res->success = false;
         res->message = "Failed to write topic " + pair.first.name + " to bag file.";

@@ -382,7 +382,12 @@ void Snapshotter::parseOptionsFromParams()
         opts.duration_limit_ = rclcpp::Duration::from_seconds(
           declare_parameter<double>(prefix + ".duration")
         );
-      } catch (const rclcpp::ParameterTypeException & ex) {
+      }   
+      catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        opts.duration_limit_ = options_.default_duration_limit_;
+      }
+      catch (const rclcpp::ParameterTypeException & ex) {
         if (std::string{ex.what()}.find("not set") == std::string::npos) {
           RCLCPP_ERROR(
             get_logger(), "Duration limit for topic %s must be a double.", topic.c_str());
@@ -392,7 +397,12 @@ void Snapshotter::parseOptionsFromParams()
 
       try {
         opts.memory_limit_ = declare_parameter<double>(prefix + ".memory");
-      } catch (const rclcpp::ParameterTypeException & ex) {
+      }    
+      catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        opts.memory_limit_ = options_.default_memory_limit_;
+      }
+      catch (const rclcpp::ParameterTypeException & ex) {
         if (std::string{ex.what()}.find("not set") == std::string::npos) {
           RCLCPP_ERROR(
             get_logger(), "Memory limit for topic %s is of the wrong type.", topic.c_str());
@@ -627,6 +637,7 @@ void Snapshotter::triggerSnapshotCb(
   */
 
   res->success = true;
+  res->message = req->filename;
 }
 
 void Snapshotter::clear()

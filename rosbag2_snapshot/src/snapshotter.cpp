@@ -582,15 +582,20 @@ void Snapshotter::triggerSnapshotCb(
   rosbag2_compression::CompressionOptions compresion_options;
   compresion_options.compression_mode = rosbag2_compression::CompressionMode::FILE;
   compresion_options.compression_format = "zstd";
+  compresion_options.compression_threads = 1;
+  compresion_options.compression_queue_size = 0;
   std::unique_ptr<rosbag2_compression::SequentialCompressionWriter> bag_writer_impl = std::make_unique<rosbag2_compression::SequentialCompressionWriter>(compresion_options);
   rosbag2_cpp::Writer bag_writer(std::move(bag_writer_impl));
   
+  std::cout << "opening " << req->filename << std::endl;
 
   try {
     bag_writer.open(req->filename);
   } catch (const std::exception & ex) {
+    RCLCPP_WARN(
+          get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());
     res->success = false;
-    res->message = "Unable to open file for writing.";
+    res->message = "Unable to open file for writing, " + std::string(ex.what());
     return;
   }
 

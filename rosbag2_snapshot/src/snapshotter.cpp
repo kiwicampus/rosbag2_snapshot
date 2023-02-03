@@ -273,6 +273,8 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.name = topic;
     details.type = type;
     details.qos = pair.first.qos;
+    details.override_old_timestamps = pair.first.override_old_timestamps;
+    details.default_bag_duration = pair.first.default_bag_duration;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -328,6 +330,16 @@ void Snapshotter::parseOptionsFromParams()
   }
 
   try {
+    options_.use_compression_ =
+      declare_parameter<bool>("use_zstd_compression", true);
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    RCLCPP_WARN(get_logger(), "param use_zstd_compression must be a boolean");
+    throw ex;
+  }
+
+  RCLCPP_INFO(get_logger(), "using %s compression", (options_.use_compression_ ? "zstd" : "no"));
+
+  try {
     topics = declare_parameter<std::vector<std::string>>(
       "topics", std::vector<std::string>{});
   } catch (const rclcpp::ParameterTypeException & ex) {
@@ -345,6 +357,7 @@ void Snapshotter::parseOptionsFromParams()
       std::string topic_type{};
       SnapshotterTopicOptions opts{};
       std::string topic_qos{};
+      bool override_old_timestamps;
 
       try {
         topic_type = declare_parameter<std::string>(prefix + ".type");
@@ -376,6 +389,18 @@ void Snapshotter::parseOptionsFromParams()
           RCLCPP_WARN(get_logger(), "Qos not defined for topic %s, using defaul qos", topic.c_str());
         }
         topic_qos = "DEFAULT";
+      }
+
+      try
+      {
+        override_old_timestamps = declare_parameter<bool>(prefix + ".override_old_timestamps");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        override_old_timestamps = false;
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        override_old_timestamps = false;
       }
   
       try {
@@ -414,6 +439,13 @@ void Snapshotter::parseOptionsFromParams()
       dets.name = topic;
       dets.type = topic_type;
       dets.qos = qos_string_to_qos(topic_qos);
+      dets.override_old_timestamps = override_old_timestamps;
+      dets.default_bag_duration = options_.default_duration_limit_;
+
+      if(dets.override_old_timestamps)
+      {
+        RCLCPP_WARN(get_logger(), "Old timestamps will be overriden for topic %s", topic.c_str());
+      }
 
       options_.topics_.insert(
         SnapshotterOptions::topics_t::value_type(dets, opts));
@@ -499,7 +531,8 @@ bool Snapshotter::writeTopic(
   MessageQueue & message_queue,
   const TopicDetails & topic_details,
   const TriggerSnapshot::Request::SharedPtr & req,
-  const TriggerSnapshot::Response::SharedPtr & res)
+  const TriggerSnapshot::Response::SharedPtr & res,
+  rclcpp::Time& request_time)
 {
   // acquire lock for this queue
   std::lock_guard l(message_queue.lock);
@@ -523,7 +556,16 @@ bool Snapshotter::writeTopic(
     }
 
     bag_message->topic_name = tm.name;
-    bag_message->time_stamp = msg_it->time.nanoseconds();
+    if(topic_details.override_old_timestamps && (request_time - msg_it->time) > topic_details.default_bag_duration)
+    {
+      // Put old messages at the beginning of the bag
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
+      bag_message->time_stamp = (request_time - topic_details.default_bag_duration).nanoseconds();
+    }
+    else
+    {
+      bag_message->time_stamp = msg_it->time.nanoseconds();
+    }
     bag_message->serialized_data = std::make_shared<rcutils_uint8_array_t>(
       msg_it->msg->get_rcl_serialized_message()
     );
@@ -578,19 +620,26 @@ void Snapshotter::triggerSnapshotCb(
       this->resume();
     }
   );
+  std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;;
+  if(options_.use_compression_)
+  {
+    rosbag2_compression::CompressionOptions compresion_options;
+    compresion_options.compression_mode = rosbag2_compression::CompressionMode::FILE;
+    compresion_options.compression_format = "zstd";
+    compresion_options.compression_threads = 1;
+    compresion_options.compression_queue_size = 0;
+    std::unique_ptr<rosbag2_compression::SequentialCompressionWriter> bag_writer_impl = std::make_unique<rosbag2_compression::SequentialCompressionWriter>(compresion_options);
+    bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>(std::move(bag_writer_impl));
+  }
+  else
+  {
+    bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
+  }
   
-  rosbag2_compression::CompressionOptions compresion_options;
-  compresion_options.compression_mode = rosbag2_compression::CompressionMode::FILE;
-  compresion_options.compression_format = "zstd";
-  compresion_options.compression_threads = 1;
-  compresion_options.compression_queue_size = 0;
-  std::unique_ptr<rosbag2_compression::SequentialCompressionWriter> bag_writer_impl = std::make_unique<rosbag2_compression::SequentialCompressionWriter>(compresion_options);
-  rosbag2_cpp::Writer bag_writer(std::move(bag_writer_impl));
-  
-  std::cout << "opening " << req->filename << std::endl;
+  RCLCPP_INFO(get_logger(), "opening %s", req->filename.c_str());
 
   try {
-    bag_writer.open(req->filename);
+    bag_writer_ptr->open(req->filename);
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
           get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());
@@ -598,6 +647,8 @@ void Snapshotter::triggerSnapshotCb(
     res->message = "Unable to open file for writing, " + std::string(ex.what());
     return;
   }
+
+  rclcpp::Time request_time = now();
 
   // Write each selected topic's queue to bag file
   if (req->topics.size() && req->topics.at(0).name.size() && req->topics.at(0).type.size()) {
@@ -614,7 +665,7 @@ void Snapshotter::triggerSnapshotCb(
 
       MessageQueue & message_queue = *(found->second);
 
-      if (!writeTopic(bag_writer, message_queue, details, req, res)) {
+      if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + topic.type + " to bag file.";
         return;
@@ -623,15 +674,14 @@ void Snapshotter::triggerSnapshotCb(
   } else {  // If topic list empty, record all buffered topics
     for (const buffers_t::value_type & pair : buffers_) {
       MessageQueue & message_queue = *(pair.second);
-      message_queue.refreshBuffer(now());
-      if (!writeTopic(bag_writer, message_queue, pair.first, req, res)) {
+      message_queue.refreshBuffer(request_time);
+      if (!writeTopic(*bag_writer_ptr, message_queue, pair.first, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + pair.first.name + " to bag file.";
         return;
       }
     }
   }
-  usleep(100e3); // for some weird reason some time is needed in order for the compression to work
   /*
   // If no topics were subscribed/valid/contained data, this is considered a non-success
   if (!bag.isOpen()) {

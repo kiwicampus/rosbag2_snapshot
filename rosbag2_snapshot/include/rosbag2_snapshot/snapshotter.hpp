@@ -55,6 +55,8 @@ struct TopicDetails
   std::string name;
   std::string type;
   rclcpp::QoS qos = rclcpp::QoS(5);
+  bool override_old_timestamps = false;
+  rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
 
   TopicDetails() {}
 
@@ -136,6 +138,8 @@ struct SnapshotterOptions
   int32_t default_memory_limit_;
   // Flag if all topics should be recorded
   bool all_topics_;
+  // Flag to tell if compression should be used
+  bool use_compression_;
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations
@@ -297,7 +301,8 @@ private:
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res);
+    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
+    rclcpp::Time& request_time);
 };
 
 // Configuration for SnapshotterClient

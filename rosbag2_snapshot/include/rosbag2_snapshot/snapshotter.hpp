@@ -36,7 +36,11 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_compression/sequential_compression_writer.hpp>
-
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -50,6 +54,17 @@ namespace rosbag2_snapshot
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
 
+/* Configuration for a the compression settings of an image topic
+
+ */
+struct ImageCompressionOptions
+{
+  bool use_compression = false; // whether to use compression
+  std::string format; // can be jpg or png
+  cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
+  int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+};
+
 struct TopicDetails
 {
   std::string name;
@@ -57,6 +72,8 @@ struct TopicDetails
   rclcpp::QoS qos = rclcpp::QoS(5);
   bool override_old_timestamps = false;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
+    // compression options for image topics;
+  ImageCompressionOptions img_compression_opts_;
 
   TopicDetails() {}
 
@@ -139,7 +156,7 @@ struct SnapshotterOptions
   // Flag if all topics should be recorded
   bool all_topics_;
   // Flag to tell if compression should be used
-  bool use_compression_;
+  std::string rosbag_preset_profile_;
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations
@@ -303,6 +320,9 @@ private:
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
     rclcpp::Time& request_time);
+
+  // Get the configuration of image compression for a given topic
+  ImageCompressionOptions getCompressionOptions(std::string topic);
 };
 
 // Configuration for SnapshotterClient

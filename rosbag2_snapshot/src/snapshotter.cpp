@@ -275,6 +275,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.qos = pair.first.qos;
     details.override_old_timestamps = pair.first.override_old_timestamps;
     details.default_bag_duration = pair.first.default_bag_duration;
+    details.img_compression_opts_ = pair.first.img_compression_opts_;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -304,6 +305,76 @@ Snapshotter::~Snapshotter()
   }
 }
 
+ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
+{
+  std::string prefix = "topic_details." + topic;
+  ImageCompressionOptions img_compression_opts;
+
+  // use compression?
+  try {
+    bool use_compression = declare_parameter<bool>(prefix + ".compression.enabled");
+    img_compression_opts.use_compression = use_compression;
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    if (std::string{ex.what()}.find("not set") == std::string::npos) {
+      RCLCPP_INFO(get_logger(), "Not using image compression for topic %s", topic.c_str());
+      img_compression_opts.use_compression = false;
+      return img_compression_opts;
+    } else { throw ex; }
+  }
+
+  // get compression format
+  try {
+    std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
+    img_compression_opts.format = compression_format;
+  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+    if (std::string{ex.what()}.find("not set") == std::string::npos) {
+      RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
+      img_compression_opts.format = "jpg";
+      img_compression_opts.imwrite_flag_value = 95;
+      img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+      return img_compression_opts;
+    } else { throw ex; }
+  }
+
+  // get jpg compression flags
+  if(img_compression_opts.format == "jpg" || img_compression_opts.format == "jpeg")
+  {
+    img_compression_opts.format = "jpg";
+    img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+    try{
+      int jpg_quality = declare_parameter<int>(prefix + ".compression.jpg_quality");
+      img_compression_opts.imwrite_flag_value = jpg_quality;
+    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+      if (std::string{ex.what()}.find("not set") == std::string::npos) {
+        RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
+        img_compression_opts.imwrite_flag_value = 95;
+      } else { throw ex; }
+    }
+  }
+  // get png compression flags
+  else if(img_compression_opts.format == "png")
+  {
+    img_compression_opts.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
+    try{
+      int png_compression_level = declare_parameter<int>(prefix + ".compression.png_compression");
+      img_compression_opts.imwrite_flag_value = png_compression_level;
+    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+      if (std::string{ex.what()}.find("not set") == std::string::npos) {
+        RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using jpg with default compression", topic.c_str());
+        img_compression_opts.imwrite_flag_value = 3;
+      } else { throw ex; }
+    }
+  }
+  // no use compression if is different than jpeg or png
+  else
+  {
+    RCLCPP_ERROR(get_logger(), "An invalid compression format was passed for topic %s: %s. Compression will be disabled for this topic", topic.c_str(), img_compression_opts.format.c_str());
+    img_compression_opts.use_compression = false;
+  }
+
+  return img_compression_opts;
+}
+
 void Snapshotter::parseOptionsFromParams()
 {
   std::vector<std::string> topics{};
@@ -330,14 +401,14 @@ void Snapshotter::parseOptionsFromParams()
   }
 
   try {
-    options_.use_compression_ =
-      declare_parameter<bool>("use_zstd_compression", true);
+    options_.rosbag_preset_profile_ =
+      declare_parameter<std::string>("rosbag_preset_profile", "zstd_small");
   } catch (const rclcpp::ParameterTypeException & ex) {
-    RCLCPP_WARN(get_logger(), "param use_zstd_compression must be a boolean");
+    RCLCPP_WARN(get_logger(), "param rosbag_preset_profile must be a string");
     throw ex;
   }
 
-  RCLCPP_INFO(get_logger(), "using %s compression", (options_.use_compression_ ? "zstd" : "no"));
+  RCLCPP_INFO(get_logger(), "using %s preset for rosbag recording", options_.rosbag_preset_profile_.c_str());
 
   try {
     topics = declare_parameter<std::vector<std::string>>(
@@ -356,6 +427,7 @@ void Snapshotter::parseOptionsFromParams()
       std::string prefix = "topic_details." + topic;
       std::string topic_type{};
       SnapshotterTopicOptions opts{};
+      ImageCompressionOptions img_compression_opts;
       std::string topic_qos{};
       bool override_old_timestamps;
 
@@ -367,8 +439,12 @@ void Snapshotter::parseOptionsFromParams()
         } else {
           RCLCPP_ERROR(get_logger(), "Topic %s is missing a type.", topic.c_str());
         }
-
         throw ex;
+      }
+
+      if(topic_type == "sensor_msgs/msg/Image")
+      {
+        img_compression_opts = getCompressionOptions(topic);
       }
 
       try
@@ -440,11 +516,17 @@ void Snapshotter::parseOptionsFromParams()
       dets.type = topic_type;
       dets.qos = qos_string_to_qos(topic_qos);
       dets.override_old_timestamps = override_old_timestamps;
+      dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
 
       if(dets.override_old_timestamps)
       {
         RCLCPP_WARN(get_logger(), "Old timestamps will be overriden for topic %s", topic.c_str());
+      }
+
+      if(dets.img_compression_opts_.use_compression)
+      {
+        RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
       }
 
       options_.topics_.insert(
@@ -544,6 +626,18 @@ bool Snapshotter::writeTopic(
   tm.type = topic_details.type;
   tm.serialization_format = "cdr";
 
+  rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
+  cv_bridge::CvImagePtr cv_bridge_img;
+  std::vector<int> compression_params; 
+  if(topic_details.img_compression_opts_.use_compression)
+  {
+    RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
+    compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
+    compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
+    img_serializer = rclcpp::Serialization<sensor_msgs::msg::Image>();
+    tm.type = "sensor_msgs/msg/CompressedImage";
+  }
+
   bag_writer.create_topic(tm);
 
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
@@ -566,11 +660,28 @@ bool Snapshotter::writeTopic(
     {
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
-    bag_message->serialized_data = std::make_shared<rcutils_uint8_array_t>(
-      msg_it->msg->get_rcl_serialized_message()
-    );
-
-    bag_writer.write(bag_message);
+    
+    if(topic_details.img_compression_opts_.use_compression)
+    {
+      sensor_msgs::msg::Image raw_img;
+      sensor_msgs::msg::CompressedImage compressed_img;
+      img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
+      // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
+      // use `rbg8` encoding to `bgr8` encoding by hand.
+      std::string imencode_compatible_encoding = raw_img.encoding == "rgb8" ? "bgr8" : raw_img.encoding;
+      cv_bridge_img = cv_bridge::toCvCopy(raw_img, imencode_compatible_encoding);
+      cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+      compressed_img.format = topic_details.img_compression_opts_.format;
+      compressed_img.header = raw_img.header;
+      bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+    }
+    else
+    {
+      bag_message->serialized_data = std::make_shared<rcutils_uint8_array_t>(
+        msg_it->msg->get_rcl_serialized_message()
+      );
+      bag_writer.write(bag_message);
+    }
   }
 
   return true;
@@ -621,25 +732,18 @@ void Snapshotter::triggerSnapshotCb(
     }
   );
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;;
-  if(options_.use_compression_)
-  {
-    rosbag2_compression::CompressionOptions compresion_options;
-    compresion_options.compression_mode = rosbag2_compression::CompressionMode::FILE;
-    compresion_options.compression_format = "zstd";
-    compresion_options.compression_threads = 1;
-    compresion_options.compression_queue_size = 0;
-    std::unique_ptr<rosbag2_compression::SequentialCompressionWriter> bag_writer_impl = std::make_unique<rosbag2_compression::SequentialCompressionWriter>(compresion_options);
-    bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>(std::move(bag_writer_impl));
-  }
-  else
-  {
-    bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
-  }
+  bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
+
   
   RCLCPP_INFO(get_logger(), "opening %s", req->filename.c_str());
 
   try {
-    bag_writer_ptr->open(req->filename);
+    rosbag2_storage::StorageOptions storage_opts;
+    storage_opts.storage_id = "mcap";
+    storage_opts.uri = req->filename;
+    storage_opts.storage_preset_profile = options_.rosbag_preset_profile_;
+    rosbag2_cpp::ConverterOptions converter_opts{};
+    bag_writer_ptr->open(storage_opts, converter_opts);
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
           get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());

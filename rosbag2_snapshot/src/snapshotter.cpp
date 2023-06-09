@@ -314,7 +314,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
   try {
     bool use_compression = declare_parameter<bool>(prefix + ".compression.enabled");
     img_compression_opts.use_compression = use_compression;
-  } catch (const rclcpp::ParameterTypeException & ex) {
+  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
     if (std::string{ex.what()}.find("not set") == std::string::npos) {
       RCLCPP_INFO(get_logger(), "Not using image compression for topic %s", topic.c_str());
       img_compression_opts.use_compression = false;
@@ -322,56 +322,58 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
     } else { throw ex; }
   }
 
-  // get compression format
-  try {
-    std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
-    img_compression_opts.format = compression_format;
-  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-    if (std::string{ex.what()}.find("not set") == std::string::npos) {
-      RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
-      img_compression_opts.format = "jpg";
-      img_compression_opts.imwrite_flag_value = 95;
-      img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
-      return img_compression_opts;
-    } else { throw ex; }
-  }
-
-  // get jpg compression flags
-  if(img_compression_opts.format == "jpg" || img_compression_opts.format == "jpeg")
+  if(img_compression_opts.use_compression)
   {
-    img_compression_opts.format = "jpg";
-    img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
-    try{
-      int jpg_quality = declare_parameter<int>(prefix + ".compression.jpg_quality");
-      img_compression_opts.imwrite_flag_value = jpg_quality;
+    // get compression format
+    try {
+      std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
+      img_compression_opts.format = compression_format;
     } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
       if (std::string{ex.what()}.find("not set") == std::string::npos) {
-        RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
+        RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
+        img_compression_opts.format = "jpg";
         img_compression_opts.imwrite_flag_value = 95;
+        img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+        return img_compression_opts;
       } else { throw ex; }
     }
-  }
-  // get png compression flags
-  else if(img_compression_opts.format == "png")
-  {
-    img_compression_opts.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
-    try{
-      int png_compression_level = declare_parameter<int>(prefix + ".compression.png_compression");
-      img_compression_opts.imwrite_flag_value = png_compression_level;
-    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-      if (std::string{ex.what()}.find("not set") == std::string::npos) {
-        RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using jpg with default compression", topic.c_str());
-        img_compression_opts.imwrite_flag_value = 3;
-      } else { throw ex; }
-    }
-  }
-  // no use compression if is different than jpeg or png
-  else
-  {
-    RCLCPP_ERROR(get_logger(), "An invalid compression format was passed for topic %s: %s. Compression will be disabled for this topic", topic.c_str(), img_compression_opts.format.c_str());
-    img_compression_opts.use_compression = false;
-  }
 
+    // get jpg compression flags
+    if(img_compression_opts.format == "jpg" || img_compression_opts.format == "jpeg")
+    {
+      img_compression_opts.format = "jpg";
+      img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+      try{
+        int jpg_quality = declare_parameter<int>(prefix + ".compression.jpg_quality");
+        img_compression_opts.imwrite_flag_value = jpg_quality;
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+        if (std::string{ex.what()}.find("not set") == std::string::npos) {
+          RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
+          img_compression_opts.imwrite_flag_value = 95;
+        } else { throw ex; }
+      }
+    }
+    // get png compression flags
+    else if(img_compression_opts.format == "png")
+    {
+      img_compression_opts.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
+      try{
+        int png_compression_level = declare_parameter<int>(prefix + ".compression.png_compression");
+        img_compression_opts.imwrite_flag_value = png_compression_level;
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+        if (std::string{ex.what()}.find("not set") == std::string::npos) {
+          RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using png with default compression", topic.c_str());
+          img_compression_opts.imwrite_flag_value = 3;
+        } else { throw ex; }
+      }
+    }
+    // no use compression if is different than jpeg or png
+    else
+    {
+      RCLCPP_ERROR(get_logger(), "An invalid compression format was passed for topic %s: %s. Compression will be disabled for this topic", topic.c_str(), img_compression_opts.format.c_str());
+      img_compression_opts.use_compression = false;
+    }
+  }
   return img_compression_opts;
 }
 

@@ -252,6 +252,9 @@ class Snapshotter : public rclcpp::Node
 {
 public:
   explicit Snapshotter(const rclcpp::NodeOptions & options);
+  /// Return current local datetime as a string such as 2018-05-22-14-28-51.
+  // Used to generate bag filenames
+  std::string timeAsStr();
   ~Snapshotter();
 
 private:
@@ -278,9 +281,6 @@ private:
   void fixTopicOptions(SnapshotterTopicOptions & options);
   // If file is "prefix" mode (doesn't end in .bag), append current datetime and .bag to end
   bool postfixFilename(std::string & file);
-  /// Return current local datetime as a string such as 2018-05-22-14-28-51.
-  // Used to generate bag filenames
-  std::string timeAsStr();
   // Clear the internal buffers of all topics. Used when resuming after a pause to avoid time gaps
   void clear();
   // Subscribe to one of the topics, setting up the callback to add to the respective queue

@@ -255,6 +255,10 @@ public:
   /// Return current local datetime as a string such as 2018-05-22-14-28-51.
   // Used to generate bag filenames
   std::string timeAsStr();
+  // Subscribe to one of the topics, setting up the callback to add to the respective queue
+  void subscribe(
+    const TopicDetails & topic_details,
+    std::shared_ptr<MessageQueue> queue);
   // Service callback, write all of part of the internal buffers to a bag file
   // according to request parameters
   void triggerSnapshotCb(
@@ -290,10 +294,6 @@ private:
   bool postfixFilename(std::string & file);
   // Clear the internal buffers of all topics. Used when resuming after a pause to avoid time gaps
   void clear();
-  // Subscribe to one of the topics, setting up the callback to add to the respective queue
-  void subscribe(
-    const TopicDetails & topic_details,
-    std::shared_ptr<MessageQueue> queue);
   // Called on new message from any configured topic. Adds to queue for that topic
   void topicCb(
     std::shared_ptr<const rclcpp::SerializedMessage> msg,

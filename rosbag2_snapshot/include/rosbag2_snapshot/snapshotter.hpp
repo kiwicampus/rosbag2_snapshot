@@ -255,6 +255,13 @@ public:
   /// Return current local datetime as a string such as 2018-05-22-14-28-51.
   // Used to generate bag filenames
   std::string timeAsStr();
+  // Service callback, write all of part of the internal buffers to a bag file
+  // according to request parameters
+  void triggerSnapshotCb(
+    const std::shared_ptr<rmw_request_id_t> request_header,
+    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr req,
+    rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr res
+  );
   ~Snapshotter();
 
 private:
@@ -291,13 +298,6 @@ private:
   void topicCb(
     std::shared_ptr<const rclcpp::SerializedMessage> msg,
     std::shared_ptr<MessageQueue> queue);
-  // Service callback, write all of part of the internal buffers to a bag file
-  // according to request parameters
-  void triggerSnapshotCb(
-    const std::shared_ptr<rmw_request_id_t> request_header,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr req,
-    rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr res
-  );
   // Service callback, enable or disable recording (storing new messages into queue).
   // Used to pause before writing
   void enableCb(

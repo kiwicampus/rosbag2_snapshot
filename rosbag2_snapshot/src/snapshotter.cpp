@@ -255,12 +255,21 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
 
 const int Snapshotter::QUEUE_SIZE = 10;
 
-Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
+Snapshotter::Snapshotter(const rclcpp::NodeOptions & options, const SnapshotterOptions & opts)
 : rclcpp::Node("snapshotter", options),
   recording_(true),
   writing_(false)
 {
-  parseOptionsFromParams();
+  // check if opts is empty
+  if (opts.topics_.empty()) {
+    RCLCPP_ERROR(get_logger(), "No topics specified from options. Looking for topics in params.");
+    parseOptionsFromParams(); 
+  }
+  else
+  {
+    options_ = opts;
+  }
+
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
   for (auto & pair : options_.topics_) {

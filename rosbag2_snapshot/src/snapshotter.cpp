@@ -780,6 +780,12 @@ void Snapshotter::triggerSnapshotCb(
 
       MessageQueue & message_queue = *(found->second);
 
+      // print size of the queue if queue size is zero
+      if (message_queue.size_ == 0)
+      {
+        RCLCPP_ERROR(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
+      }
+
       if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + topic.type + " to bag file.";

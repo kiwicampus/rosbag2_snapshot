@@ -251,7 +251,7 @@ private:
 class Snapshotter : public rclcpp::Node
 {
 public:
-  explicit Snapshotter(const rclcpp::NodeOptions & options, SnapshotterOptions const & opts = SnapshotterOptions());
+  explicit Snapshotter(const rclcpp::NodeOptions & options);
   /// Return current local datetime as a string such as 2018-05-22-14-28-51.
   // Used to generate bag filenames
   std::string timeAsStr();

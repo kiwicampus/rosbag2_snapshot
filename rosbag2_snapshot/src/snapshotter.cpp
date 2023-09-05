@@ -255,21 +255,13 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
 
 const int Snapshotter::QUEUE_SIZE = 10;
 
-Snapshotter::Snapshotter(const rclcpp::NodeOptions & options, const SnapshotterOptions & opts)
+Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 : rclcpp::Node("snapshotter", options),
   recording_(true),
   writing_(false)
 {
-  // check if opts is empty
-  if (opts.topics_.empty()) {
-    RCLCPP_ERROR(get_logger(), "No topics specified from options. Looking for topics in params.");
-    parseOptionsFromParams(); 
-  }
-  else
-  {
-    options_ = opts;
-  }
 
+  parseOptionsFromParams(); 
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
   for (auto & pair : options_.topics_) {
@@ -585,6 +577,7 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
+  RCLCPP_WARN(get_logger(), "topicCb");
   // If recording is paused (or writing), exit
   {
     std::shared_lock<std::shared_mutex> lock(state_lock_);

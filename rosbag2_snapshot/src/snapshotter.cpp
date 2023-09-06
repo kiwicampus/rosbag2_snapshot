@@ -577,7 +577,6 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
-  RCLCPP_WARN(get_logger(), "topicCb");
   // If recording is paused (or writing), exit
   {
     std::shared_lock<std::shared_mutex> lock(state_lock_);

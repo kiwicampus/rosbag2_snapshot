@@ -72,8 +72,10 @@ struct TopicDetails
   rclcpp::QoS qos = rclcpp::QoS(5);
   bool override_old_timestamps = false;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
-    // compression options for image topics;
+  // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
+  // max time between messages to save (in seconds)
+  double max_save_period = -1.0;
 
   TopicDetails() {}
 

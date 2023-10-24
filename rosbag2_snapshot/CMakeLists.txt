@@ -43,7 +43,7 @@ set(DEPENDENCIES
   cv_bridge
 )
 
-set(executable_name rosbag2_snapshot)
+set(executable_name snapshotter)
 set(library_name ${executable_name}_core)
 
 add_library(${library_name} SHARED

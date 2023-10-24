@@ -43,7 +43,8 @@ set(DEPENDENCIES
   cv_bridge
 )
 
-set(library_name ${PROJECT_NAME}_core)
+set(executable_name rosbag2_snapshot)
+set(library_name ${executable_name}_core)
 
 add_library(${library_name} SHARED
   include/rosbag2_snapshot/snapshotter.hpp
@@ -51,7 +52,18 @@ add_library(${library_name} SHARED
   src/snapshotter.cpp
 )
 
+add_executable(${executable_name}
+  src/main.cpp
+)
+
 ament_target_dependencies(${library_name}
+  ${DEPENDENCIES}
+)
+
+target_link_libraries(${executable_name}
+  ${library_name}
+)
+ament_target_dependencies(${executable_name}
   ${DEPENDENCIES}
 )
 
@@ -63,6 +75,10 @@ install(TARGETS ${library_name}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+
+install(TARGETS ${executable_name}
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

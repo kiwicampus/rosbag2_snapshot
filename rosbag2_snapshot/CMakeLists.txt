@@ -28,8 +28,6 @@ include_directories(
   include
 )
 
-ament_export_include_directories(include)
-
 set(DEPENDENCIES
   rosbag2_cpp
   rosbag2_compression

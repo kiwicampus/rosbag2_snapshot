@@ -804,7 +804,7 @@ void Snapshotter::triggerSnapshotCb(
       // print size of the queue if queue size is zero
       if (message_queue.size_ == 0)
       {
-        RCLCPP_ERROR(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
+        RCLCPP_WARN(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
       }
 
       if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
@@ -840,7 +840,7 @@ void Snapshotter::triggerSnapshotCb(
 void Snapshotter::clear()
 {
   for (const buffers_t::value_type & pair : buffers_) {
-    pair.second->clear();
+    // pair.second->clear();
   }
 }
 
@@ -854,7 +854,7 @@ void Snapshotter::resume()
 {
   clear();
   recording_ = true;
-  RCLCPP_INFO(get_logger(), "Buffering resumed and old data cleared.");
+  RCLCPP_INFO(get_logger(), "Buffering resumed and old data NOT cleared.");
 }
 
 void Snapshotter::enableCb(

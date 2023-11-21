@@ -75,7 +75,7 @@ struct TopicDetails
   // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
   // max time between messages to save (in seconds)
-  double max_save_period = -1.0;
+  double throttle_period = -1.0;
 
   TopicDetails() {}
 

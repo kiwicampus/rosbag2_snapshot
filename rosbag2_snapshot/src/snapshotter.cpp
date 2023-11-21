@@ -277,7 +277,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.override_old_timestamps = pair.first.override_old_timestamps;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
-    details.max_save_period = pair.first.max_save_period;
+    details.throttle_period = pair.first.throttle_period;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -434,7 +434,7 @@ void Snapshotter::parseOptionsFromParams()
       ImageCompressionOptions img_compression_opts;
       std::string topic_qos{};
       bool override_old_timestamps;
-      double max_save_period = -1.0;
+      double throttle_period = -1.0;
 
       try {
         topic_type = declare_parameter<std::string>(prefix + ".type");
@@ -486,14 +486,14 @@ void Snapshotter::parseOptionsFromParams()
 
       try
       {
-        max_save_period = declare_parameter<double>(prefix + ".max_save_period");
+        throttle_period = declare_parameter<double>(prefix + ".throttle_period");
       }
         catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
       {
-        max_save_period = -1.0;
+        throttle_period = -1.0;
       } catch (const rclcpp::ParameterTypeException& ex)
       {
-        max_save_period = -1.0;
+        throttle_period = -1.0;
       }
   
       try {
@@ -535,7 +535,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.override_old_timestamps = override_old_timestamps;
       dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
-      dets.max_save_period = max_save_period;
+      dets.throttle_period = throttle_period;
 
       if(dets.override_old_timestamps)
       {
@@ -547,9 +547,9 @@ void Snapshotter::parseOptionsFromParams()
         RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
       }
 
-      if(dets.max_save_period > 0.0)
+      if(dets.throttle_period > 0.0)
       {
-        RCLCPP_INFO(get_logger(), "max save period: %f for topic %s messages will be throttled", dets.max_save_period, topic.c_str());
+        RCLCPP_INFO(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
       }
 
       options_.topics_.insert(
@@ -673,9 +673,9 @@ bool Snapshotter::writeTopic(
       return false;
     }
       
-    if (topic_details.max_save_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.max_save_period * 1e9)
+    if (topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
-      RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, max save period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.max_save_period);
+      RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period);
       continue;
     }
 

@@ -839,9 +839,18 @@ void Snapshotter::triggerSnapshotCb(
 
 void Snapshotter::clear()
 {
-  for (const buffers_t::value_type & pair : buffers_) {
-    // pair.second->clear();
-  }
+  /*
+  Leaving this function empty for now.
+  We dont want to clear the complete buffer as more than one snapshot can be triggered
+  in a short time period.
+
+  Message buffers are still being cleared with the duration and memory limits
+  in the MessageQueue class to avoid memory overflows.
+  */
+
+  // for (const buffers_t::value_type & pair : buffers_) {
+  //   pair.second->clear();
+  // }
 }
 
 void Snapshotter::pause()
@@ -854,7 +863,7 @@ void Snapshotter::resume()
 {
   clear();
   recording_ = true;
-  RCLCPP_INFO(get_logger(), "Buffering resumed and old data NOT cleared.");
+  RCLCPP_INFO(get_logger(), "Buffering resumed");
 }
 
 void Snapshotter::enableCb(

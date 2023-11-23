@@ -787,8 +787,21 @@ void Snapshotter::triggerSnapshotCb(
   rclcpp::Time request_time = now();
 
   // Write each selected topic's queue to bag file
-  if (req->topics.size() && req->topics.at(0).name.size() && req->topics.at(0).type.size()) {
+  if (req->topics.size()) {
     for (auto & topic : req->topics) {
+
+      if (topic.type.empty()) {
+        auto it = std::find_if(buffers_.begin(), buffers_.end(),
+          [&topic](const auto &saved_topic) {
+            return saved_topic.first.name == topic.name;
+          });
+
+        if (it != buffers_.end()) {
+          topic.type = it->first.type;
+          RCLCPP_INFO(get_logger(), "Assigned type %s to topic %s", topic.type.c_str(), topic.name.c_str());
+        }
+      }
+
       TopicDetails details{topic.name, topic.type};
       // Find the message queue for this topic if it exsists
       auto found = buffers_.find(details);
@@ -799,6 +812,7 @@ void Snapshotter::triggerSnapshotCb(
         continue;
       }
 
+      details = found->first;
       MessageQueue & message_queue = *(found->second);
 
       // print size of the queue if queue size is zero

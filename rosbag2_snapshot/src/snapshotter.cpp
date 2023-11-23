@@ -798,7 +798,7 @@ void Snapshotter::triggerSnapshotCb(
 
         if (it != buffers_.end()) {
           topic.type = it->first.type;
-          RCLCPP_INFO(get_logger(), "Assigned type %s to topic %s", topic.type.c_str(), topic.name.c_str());
+          RCLCPP_DEBUG(get_logger(), "Assigned type %s to topic %s", topic.type.c_str(), topic.name.c_str());
         }
       }
 

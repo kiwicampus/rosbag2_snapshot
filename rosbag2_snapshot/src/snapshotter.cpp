@@ -700,9 +700,17 @@ bool Snapshotter::writeTopic(
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
-      std::string imencode_compatible_encoding = raw_img.encoding == "rgb8" ? "bgr8" : raw_img.encoding;
-      cv_bridge_img = cv_bridge::toCvCopy(raw_img, imencode_compatible_encoding);
-      cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+      if (raw_img.encoding == "rgb8")
+      {
+        cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
+        cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
+        cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+      }
+      else
+      {
+        cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
+        cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+      }
       compressed_img.format = topic_details.img_compression_opts_.format;
       compressed_img.header = raw_img.header;
       bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
@@ -853,18 +861,18 @@ void Snapshotter::triggerSnapshotCb(
 
 void Snapshotter::clear()
 {
-  /*
-  Leaving this function empty for now.
-  We dont want to clear the complete buffer as more than one snapshot can be triggered
-  in a short time period.
-
-  Message buffers are still being cleared with the duration and memory limits
-  in the MessageQueue class to avoid memory overflows.
-  */
-
-  // for (const buffers_t::value_type & pair : buffers_) {
-  //   pair.second->clear();
-  // }
+  for (const buffers_t::value_type & pair : buffers_) {
+    // if oldest message is older than default_bag_duration, clear the queue
+    // Kiwi Added this condition to avoid clearing the buffer constantly
+    // but still clear it if the duration exceeds the limit
+    if (pair.second->duration() > pair.first.default_bag_duration) {
+      RCLCPP_WARN(get_logger(), 
+        "Clearing buffer for topic %s current duration: %f, default_bag_duration: %f", 
+        pair.first.name.c_str(), pair.second->duration().seconds(), pair.first.default_bag_duration.seconds()
+      );
+      pair.second->clear();
+    }
+  }
 }
 
 void Snapshotter::pause()

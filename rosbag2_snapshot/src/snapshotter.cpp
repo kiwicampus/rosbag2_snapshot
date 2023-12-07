@@ -260,7 +260,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   recording_(true),
   writing_(false)
 {
-  parseOptionsFromParams(); 
+  parseOptionsFromParams();
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
   for (auto & pair : options_.topics_) {
@@ -756,7 +756,7 @@ void Snapshotter::triggerSnapshotCb(
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (recording_prior) {
-      pause();
+      // pause();
     }
     writing_ = true;
   }
@@ -911,7 +911,7 @@ void Snapshotter::enableCb(
     resume();
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    pause();
+    // pause();
   }
 
   res->success = true;

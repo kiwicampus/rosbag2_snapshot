@@ -260,7 +260,6 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   recording_(true),
   writing_(false)
 {
-
   parseOptionsFromParams(); 
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
@@ -702,6 +701,7 @@ bool Snapshotter::writeTopic(
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if (raw_img.encoding == "rgb8")
       {
+        // Create a Mat from the image message (without copying).
         cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
         cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
@@ -795,7 +795,7 @@ void Snapshotter::triggerSnapshotCb(
   rclcpp::Time request_time = now();
 
   // Write each selected topic's queue to bag file
-  if (req->topics.size()) {
+  if (req->topics.size() && req->topics.at(0).name.size()) {
     for (auto & topic : req->topics) {
 
       if (topic.type.empty()) {

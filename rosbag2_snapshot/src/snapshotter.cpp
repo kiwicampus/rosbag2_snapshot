@@ -276,6 +276,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.override_old_timestamps = pair.first.override_old_timestamps;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
+    details.throttle_period = pair.first.throttle_period;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -432,6 +433,7 @@ void Snapshotter::parseOptionsFromParams()
       ImageCompressionOptions img_compression_opts;
       std::string topic_qos{};
       bool override_old_timestamps;
+      double throttle_period = -1.0;
 
       try {
         topic_type = declare_parameter<std::string>(prefix + ".type");
@@ -480,6 +482,18 @@ void Snapshotter::parseOptionsFromParams()
       {
         override_old_timestamps = false;
       }
+
+      try
+      {
+        throttle_period = declare_parameter<double>(prefix + ".throttle_period");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        throttle_period = -1.0;
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        throttle_period = -1.0;
+      }
   
       try {
         opts.duration_limit_ = rclcpp::Duration::from_seconds(
@@ -520,6 +534,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.override_old_timestamps = override_old_timestamps;
       dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
+      dets.throttle_period = throttle_period;
 
       if(dets.override_old_timestamps)
       {
@@ -529,6 +544,11 @@ void Snapshotter::parseOptionsFromParams()
       if(dets.img_compression_opts_.use_compression)
       {
         RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
+      }
+
+      if(dets.throttle_period > 0.0)
+      {
+        RCLCPP_INFO(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
       }
 
       options_.topics_.insert(
@@ -642,6 +662,7 @@ bool Snapshotter::writeTopic(
 
   bag_writer.create_topic(tm);
 
+  double prev_msg_time = 0.0;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -650,6 +671,14 @@ bool Snapshotter::writeTopic(
       RCLCPP_ERROR(get_logger(), "Failed to assign time to rosbag message.");
       return false;
     }
+      
+    if (topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
+    {
+      RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period);
+      continue;
+    }
+
+    prev_msg_time = msg_it->time.nanoseconds();
 
     bag_message->topic_name = tm.name;
     if(topic_details.override_old_timestamps && (request_time - msg_it->time) > topic_details.default_bag_duration)
@@ -670,9 +699,18 @@ bool Snapshotter::writeTopic(
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
-      std::string imencode_compatible_encoding = raw_img.encoding == "rgb8" ? "bgr8" : raw_img.encoding;
-      cv_bridge_img = cv_bridge::toCvCopy(raw_img, imencode_compatible_encoding);
-      cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+      if (raw_img.encoding == "rgb8")
+      {
+        // Create a Mat from the image message (without copying).
+        cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
+        cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
+        cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+      }
+      else
+      {
+        cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
+        cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+      }
       compressed_img.format = topic_details.img_compression_opts_.format;
       compressed_img.header = raw_img.header;
       bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
@@ -718,7 +756,7 @@ void Snapshotter::triggerSnapshotCb(
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (recording_prior) {
-      pause();
+      // pause();
     }
     writing_ = true;
   }
@@ -757,8 +795,21 @@ void Snapshotter::triggerSnapshotCb(
   rclcpp::Time request_time = now();
 
   // Write each selected topic's queue to bag file
-  if (req->topics.size() && req->topics.at(0).name.size() && req->topics.at(0).type.size()) {
+  if (req->topics.size() && req->topics.at(0).name.size()) {
     for (auto & topic : req->topics) {
+
+      if (topic.type.empty()) {
+        auto it = std::find_if(buffers_.begin(), buffers_.end(),
+          [&topic](const auto &saved_topic) {
+            return saved_topic.first.name == topic.name;
+          });
+
+        if (it != buffers_.end()) {
+          topic.type = it->first.type;
+          RCLCPP_DEBUG(get_logger(), "Assigned type %s to topic %s", topic.type.c_str(), topic.name.c_str());
+        }
+      }
+
       TopicDetails details{topic.name, topic.type};
       // Find the message queue for this topic if it exsists
       auto found = buffers_.find(details);
@@ -769,7 +820,14 @@ void Snapshotter::triggerSnapshotCb(
         continue;
       }
 
+      details = found->first;
       MessageQueue & message_queue = *(found->second);
+
+      // print size of the queue if queue size is zero
+      if (message_queue.size_ == 0)
+      {
+        RCLCPP_WARN(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
+      }
 
       if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
         res->success = false;
@@ -804,7 +862,16 @@ void Snapshotter::triggerSnapshotCb(
 void Snapshotter::clear()
 {
   for (const buffers_t::value_type & pair : buffers_) {
-    pair.second->clear();
+    // if oldest message is older than default_bag_duration, clear the queue
+    // Kiwi Added this condition to avoid clearing the buffer constantly
+    // but still clear it if the duration exceeds the limit
+    if (pair.second->duration() > pair.first.default_bag_duration) {
+      RCLCPP_WARN(get_logger(), 
+        "Clearing buffer for topic %s current duration: %f, default_bag_duration: %f", 
+        pair.first.name.c_str(), pair.second->duration().seconds(), pair.first.default_bag_duration.seconds()
+      );
+      pair.second->clear();
+    }
   }
 }
 
@@ -818,7 +885,7 @@ void Snapshotter::resume()
 {
   clear();
   recording_ = true;
-  RCLCPP_INFO(get_logger(), "Buffering resumed and old data cleared.");
+  RCLCPP_INFO(get_logger(), "Buffering resumed");
 }
 
 void Snapshotter::enableCb(
@@ -844,7 +911,7 @@ void Snapshotter::enableCb(
     resume();
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    pause();
+    // pause();
   }
 
   res->success = true;

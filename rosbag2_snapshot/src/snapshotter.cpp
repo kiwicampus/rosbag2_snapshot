@@ -727,6 +727,14 @@ bool Snapshotter::writeTopic(
   return true;
 }
 
+void Snapshotter::H264Compression(sensor_msgs::msg::Image& raw_img)
+{
+  RCLCPP_INFO(get_logger(), "topic %s is an image. applying h264 compression", raw_img.header.frame_id.c_str());
+  cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
+  cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
+  
+}
+
 void Snapshotter::triggerSnapshotCb(
   const std::shared_ptr<rmw_request_id_t> request_header,
   const TriggerSnapshot::Request::SharedPtr req,

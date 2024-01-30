@@ -41,6 +41,8 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <ffmpeg_image_transport_msgs/msg/ffmpeg_packet.hpp>
+#include <foxglove_msgs/msg/compressed_video.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -322,6 +324,8 @@ private:
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
     rclcpp::Time& request_time);
+
+  void H264Compression(sensor_msgs::msg::Image& raw_img);
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);

@@ -704,12 +704,14 @@ bool Snapshotter::writeTopic(
         // Create a Mat from the image message (without copying).
         cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
-        cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+        // cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+        encodeImage(cv_img, raw_img.header, now());
       }
       else
       {
         cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
-        cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+        // cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+        encodeImage(cv_bridge_img->image, raw_img.header, now());
       }
       compressed_img.format = topic_details.img_compression_opts_.format;
       compressed_img.header = raw_img.header;
@@ -725,14 +727,6 @@ bool Snapshotter::writeTopic(
   }
 
   return true;
-}
-
-void Snapshotter::H264Compression(sensor_msgs::msg::Image& raw_img)
-{
-  RCLCPP_INFO(get_logger(), "topic %s is an image. applying h264 compression", raw_img.header.frame_id.c_str());
-  cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
-  cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
-  
 }
 
 void Snapshotter::encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0)

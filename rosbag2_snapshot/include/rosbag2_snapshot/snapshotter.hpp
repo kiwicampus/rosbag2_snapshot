@@ -360,7 +360,6 @@ private:
   PTSMap ptsToStamp_;
   void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);
   int drainPacket(const Header & header, int width, int height);
-  void H264Compression(sensor_msgs::msg::Image& raw_img);
 };
 
 // Configuration for SnapshotterClient

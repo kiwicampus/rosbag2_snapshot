@@ -51,10 +51,26 @@
 #include <utility>
 #include <vector>
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+#include <libavutil/samplefmt.h>
+#include <libswscale/swscale.h>
+}
+
 namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
+using Lock = std::unique_lock<std::recursive_mutex>;
+using CompressedVideo = foxglove_msgs::msg::CompressedVideo;
+using CompressedVideoConstPtr = CompressedVideo::ConstSharedPtr;
+using Callback = std::function<void(const CompressedVideoConstPtr & pkt)>;
+using Header = std_msgs::msg::Header;
+using PTSMap = std::unordered_map<int64_t, rclcpp::Time>;
 
 /* Configuration for a the compression settings of an image topic
 
@@ -325,10 +341,26 @@ private:
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
     rclcpp::Time& request_time);
 
-  void H264Compression(sensor_msgs::msg::Image& raw_img);
-
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
+  /*
+    H264 compression Related
+  */
+  mutable std::recursive_mutex mutex_;
+  std::function<void(const CompressedVideoConstPtr & pkt)> callback_;
+  // ------ libav state
+  AVCodecContext * codecContext_{nullptr};
+  AVFrame * frame_{nullptr};
+  AVPacket * packet_{nullptr};
+  // ------ libswscale state
+  AVFrame * wrapperFrame_{nullptr};
+  SwsContext * swsContext_{NULL};
+  // ---------- other stuff
+  int64_t pts_{0};
+  PTSMap ptsToStamp_;
+  void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);
+  int drainPacket(const Header & header, int width, int height);
+  void H264Compression(sensor_msgs::msg::Image& raw_img);
 };
 
 // Configuration for SnapshotterClient

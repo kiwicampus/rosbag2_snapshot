@@ -705,12 +705,14 @@ bool Snapshotter::writeTopic(
         cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+        RCLCPP_WARN(get_logger(), "encoding RGB image");
         encodeImage(cv_img, raw_img.header, now());
       }
       else
       {
         cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
+        RCLCPP_WARN(get_logger(), "encoding BGR image");
         encodeImage(cv_bridge_img->image, raw_img.header, now());
       }
       compressed_img.format = topic_details.img_compression_opts_.format;
@@ -732,20 +734,41 @@ bool Snapshotter::writeTopic(
 void Snapshotter::encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0)
 {
   Lock lock(mutex_);
+  // Initialize packet
+  RCLCPP_WARN(get_logger(), "encoding 0 image");
+
+  packet_ = av_packet_alloc();
+  packet_->data = NULL;
+  packet_->size = 0;
+
+  RCLCPP_WARN(get_logger(), "encoding 0.5 image");
+
+  // create (src) frame that wraps the received uncompressed image
+  wrapperFrame_ = av_frame_alloc();
+  wrapperFrame_->width = img.cols;
+  wrapperFrame_->height = img.rows;
+  wrapperFrame_->format = AV_PIX_FMT_BGR24;
+  RCLCPP_WARN(get_logger(), "encoding 1 image");
+
   // bend the memory pointers in colorFrame to the right locations
   av_image_fill_arrays(
     wrapperFrame_->data, wrapperFrame_->linesize, &(img.data[0]),
     static_cast<AVPixelFormat>(wrapperFrame_->format), wrapperFrame_->width, wrapperFrame_->height,
     1 /* alignment, could be better*/);
+  RCLCPP_WARN(get_logger(), "encoding 2 image");
+
   sws_scale(
     swsContext_, wrapperFrame_->data, wrapperFrame_->linesize, 0,  // src
     codecContext_->height, frame_->data, frame_->linesize);        // dest
+  RCLCPP_WARN(get_logger(), "encoding 3 image");
 
 
   frame_->pts = pts_++;  //
   ptsToStamp_.insert(PTSMap::value_type(frame_->pts, header.stamp));
+  RCLCPP_WARN(get_logger(), "encoding 4 image");
 
   auto ret = avcodec_send_frame(codecContext_, frame_);
+  RCLCPP_WARN(get_logger(), "encoding 5 image");
 
   // now drain all packets
   while (ret == 0) {

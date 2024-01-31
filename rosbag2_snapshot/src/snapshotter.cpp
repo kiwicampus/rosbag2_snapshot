@@ -120,8 +120,15 @@ void MessageQueue::clear()
 
 void MessageQueue::_clear()
 {
-  queue_.clear();
-  size_ = 0;
+  if(options_.duration_limit_.seconds() > 0.0)
+  {
+    queue_.clear();
+    size_ = 0;
+  }
+  else
+  {
+    RCLCPP_INFO(logger_, "Not clearing queue for topic %s because duration is set to %f", sub_->get_topic_name(), options_.duration_limit_.seconds());
+  }
 }
 
 rclcpp::Duration MessageQueue::duration() const
@@ -239,15 +246,19 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
 
-  // Increment / Decrement iterators until time contraints are met
-  if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
-    while (begin != end && (*begin).time < start) {
-      ++begin;
+  
+  if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
+  {
+    // Increment / Decrement iterators until time contraints are met
+    if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
+      while (begin != end && (*begin).time < start) {
+        ++begin;
+      }
     }
-  }
-  if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
-    while (end != begin && (*(end - 1)).time > stop) {
-      --end;
+    if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
+      while (end != begin && (*(end - 1)).time > stop) {
+        --end;
+      }
     }
   }
   return range_t(begin, end);
@@ -685,7 +696,7 @@ bool Snapshotter::writeTopic(
     {
       // Put old messages at the beginning of the bag
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
-      bag_message->time_stamp = (request_time - topic_details.default_bag_duration).nanoseconds();
+      bag_message->time_stamp = req->start_time.sec*1e9 + req->start_time.nanosec;
     }
     else
     {

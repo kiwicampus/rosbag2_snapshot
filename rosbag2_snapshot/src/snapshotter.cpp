@@ -241,11 +241,15 @@ SnapshotMessage MessageQueue::_pop()
   return tmp;
 }
 
-MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop)
+MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop, Time const & msg_time)
 {
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
 
+  // check that msg_time is within the range
+  if (msg_time < start || msg_time > stop) {
+    RCLCPP_ERROR(logger_, "msg_time is not within the range of start and stop times");
+  }
   
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
@@ -259,27 +263,6 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
       while (end != begin && (*(end - 1)).time > stop) {
         --end;
       }
-    }
-  }
-  return range_t(begin, end);
-}
-
-MessageQueue::range_t MessageQueue::intervalFromTimes(Time const & start, Time const & stop, Time const & msg_time)
-{
-  range_t::first_type begin = queue_.begin();
-  range_t::second_type end = queue_.end();
-
-  if(options_.duration_limit_ == options_.NO_DURATION_LIMIT) return range_t(begin, end);
-  
-  // Increment / Decrement iterators until time contraints are met arounf msg_time
-  if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
-    while (begin != end && (*begin).time < msg_time) {
-      ++begin;
-    }
-  }
-  if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
-    while (end != begin && (*(end - 1)).time > msg_time) {
-      --end;
     }
   }
   return range_t(begin, end);
@@ -673,11 +656,7 @@ bool Snapshotter::writeTopic(
   // acquire lock for this queue
   std::lock_guard l(message_queue.lock);
 
-  MessageQueue::range_t range;
-  if (!req->use_interval_mode)
-    MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
-  else
-    MessageQueue::range_t range = message_queue.intervalFromTimes(req->start_time, req->stop_time, req->msg_timestamp);
+  MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time, req->msg_timestamp);
 
   rosbag2_storage::TopicMetadata tm;
   tm.name = topic_details.name;
@@ -832,6 +811,7 @@ void Snapshotter::triggerSnapshotCb(
 
   // Write each selected topic's queue to bag file
   if (req->topics.size() && req->topics.at(0).name.size()) {
+    if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "Using interval mode for snapshotting");
     for (auto & topic : req->topics) {
 
       if (topic.type.empty()) {
@@ -864,7 +844,6 @@ void Snapshotter::triggerSnapshotCb(
       {
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
       }
-
       if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + topic.type + " to bag file.";

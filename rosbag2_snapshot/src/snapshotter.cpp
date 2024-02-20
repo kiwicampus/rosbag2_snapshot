@@ -264,6 +264,27 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
   return range_t(begin, end);
 }
 
+MessageQueue::range_t MessageQueue::intervalFromTimes(Time const & start, Time const & stop, Time const & msg_time)
+{
+  range_t::first_type begin = queue_.begin();
+  range_t::second_type end = queue_.end();
+
+  if(options_.duration_limit_ == options_.NO_DURATION_LIMIT) return range_t(begin, end);
+  
+  // Increment / Decrement iterators until time contraints are met arounf msg_time
+  if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
+    while (begin != end && (*begin).time < msg_time) {
+      ++begin;
+    }
+  }
+  if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
+    while (end != begin && (*(end - 1)).time > msg_time) {
+      --end;
+    }
+  }
+  return range_t(begin, end);
+}
+
 const int Snapshotter::QUEUE_SIZE = 10;
 
 Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
@@ -652,7 +673,11 @@ bool Snapshotter::writeTopic(
   // acquire lock for this queue
   std::lock_guard l(message_queue.lock);
 
-  MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
+  MessageQueue::range_t range;
+  if (!req->use_interval_mode)
+    MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
+  else
+    MessageQueue::range_t range = message_queue.intervalFromTimes(req->start_time, req->stop_time, req->msg_timestamp);
 
   rosbag2_storage::TopicMetadata tm;
   tm.name = topic_details.name;

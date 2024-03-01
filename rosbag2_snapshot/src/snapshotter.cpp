@@ -692,7 +692,7 @@ bool Snapshotter::writeTopic(
     prev_msg_time = msg_it->time.nanoseconds();
 
     bag_message->topic_name = tm.name;
-    rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->stop_time);
+    rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
     if(topic_details.override_old_timestamps && (request_time - msg_it->time) > bag_duration)
     {
       // Put old messages at the beginning of the bag

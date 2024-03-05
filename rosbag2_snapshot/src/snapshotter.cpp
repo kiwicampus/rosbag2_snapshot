@@ -659,6 +659,7 @@ bool Snapshotter::writeTopic(
   tm.serialization_format = "cdr";
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
+  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> cam_info_serializer;
   cv_bridge::CvImagePtr cv_bridge_img;
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
@@ -701,27 +702,39 @@ bool Snapshotter::writeTopic(
     {
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
+
+    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode)
+    {
+      cam_info_serializer = rclcpp::Serialization<sensor_msgs::msg::CameraInfo>();
+      sensor_msgs::msg::CameraInfo cam_info;
+      cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
+      // if use_interval_mode is true, compare the message timestamp with the requested timestamp
+      // to only write messages within the tolerance
+      double nsec_diff = cam_info.header.stamp.nanosec - req->msg_timestamp.nanosec;
+      double diff_sec = std::abs(cam_info.header.stamp.sec - req->msg_timestamp.sec) + std::abs(nsec_diff * 1e-9);
+
+      // Check if the message is within the tolerance
+      if (diff_sec > req->interval_mode_tolerance) continue;
+      if (req->use_interval_mode) RCLCPP_INFO(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %f", topic_details.name.c_str(), msg_it->time.seconds());
+    }
+
     
     if(topic_details.img_compression_opts_.use_compression)
     {
       sensor_msgs::msg::Image raw_img;
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
-      // if use_interval_mode is true, and msg has header
+
+      // if use_interval_mode is true, compare the message timestamp with the requested timestamp
+      // to only write messages within the tolerance
       if (req->use_interval_mode)
       {
           double nsec_diff = raw_img.header.stamp.nanosec - req->msg_timestamp.nanosec;
           double diff_sec = std::abs(raw_img.header.stamp.sec - req->msg_timestamp.sec) + std::abs(nsec_diff * 1e-9);
 
           // Check if the message is within the tolerance
-          if (diff_sec <= req->interval_mode_tolerance)
-          {
-              RCLCPP_INFO(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %d", topic_details.name.c_str(), raw_img.header.stamp.sec);
-          }
-          else
-          {
-              continue;
-          }
+          if (diff_sec > req->interval_mode_tolerance) continue;
+          if (req->use_interval_mode) RCLCPP_INFO(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %f", topic_details.name.c_str(), msg_it->time.seconds());
       }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.

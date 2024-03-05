@@ -13,6 +13,9 @@ bool use_interval_mode               # If true, start_time and stop_time are int
                                      # If false, start_time and stop_time are interpreted as absolute times
 builtin_interfaces/Time  msg_timestamp  # Timestamp of the message that triggered the snapshot
                                         # that must be included. Helps in the interval_mode to avoid missing the message
+float32 interval_mode_tolerance       # Tolerance in seconds for interval mode. If a message falls within the interval
+                                     # [msg_timestamp - interval_mode_tolerance, msg_timestamp + interval_mode_tolerance]
+                                     # it will be included in the snapshot
 
 ---
 

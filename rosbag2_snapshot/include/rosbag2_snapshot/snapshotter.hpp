@@ -226,7 +226,7 @@ public:
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
-  range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end, const rclcpp::Time & msg_timestamp);
+  range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end);
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const & msg) const;

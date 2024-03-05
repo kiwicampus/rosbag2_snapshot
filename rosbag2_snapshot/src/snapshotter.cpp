@@ -241,16 +241,10 @@ SnapshotMessage MessageQueue::_pop()
   return tmp;
 }
 
-MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop, Time const & msg_time)
+MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop)
 {
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
-
-  // check that msg_time is within the range
-  if (msg_time < start || msg_time > stop) {
-    RCLCPP_ERROR(logger_, "msg_time is not within the range of start and stop times");
-    // We dont return as if we dont shorten the range the bag will be the size of the whole queue
-  }
   
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
@@ -657,7 +651,7 @@ bool Snapshotter::writeTopic(
   // acquire lock for this queue
   std::lock_guard l(message_queue.lock);
 
-  MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time, req->msg_timestamp);
+  MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
 
   rosbag2_storage::TopicMetadata tm;
   tm.name = topic_details.name;
@@ -713,6 +707,22 @@ bool Snapshotter::writeTopic(
       sensor_msgs::msg::Image raw_img;
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
+      // if use_interval_mode is true, and msg has header
+      if (req->use_interval_mode)
+      {
+          double nsec_diff = raw_img.header.stamp.nanosec - req->msg_timestamp.nanosec;
+          double diff_sec = std::abs(raw_img.header.stamp.sec - req->msg_timestamp.sec) + std::abs(nsec_diff / 1e9);
+
+          // Check if the message is within the tolerance
+          if (diff_sec < req->interval_mode_tolerance)
+          {
+              RCLCPP_INFO(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %d", topic_details.name.c_str(), raw_img.header.stamp.sec);
+          }
+          else
+          {
+              continue;
+          }
+      }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if (raw_img.encoding == "rgb8")

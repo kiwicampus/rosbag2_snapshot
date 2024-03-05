@@ -682,7 +682,7 @@ bool Snapshotter::writeTopic(
       return false;
     }
       
-    if (topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
+    if (!req->use_interval_mode && topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
       RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period);
       continue;
@@ -711,10 +711,10 @@ bool Snapshotter::writeTopic(
       if (req->use_interval_mode)
       {
           double nsec_diff = raw_img.header.stamp.nanosec - req->msg_timestamp.nanosec;
-          double diff_sec = std::abs(raw_img.header.stamp.sec - req->msg_timestamp.sec) + std::abs(nsec_diff / 1e9);
+          double diff_sec = std::abs(raw_img.header.stamp.sec - req->msg_timestamp.sec) + std::abs(nsec_diff * 1e-9);
 
           // Check if the message is within the tolerance
-          if (diff_sec < req->interval_mode_tolerance)
+          if (diff_sec <= req->interval_mode_tolerance)
           {
               RCLCPP_INFO(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %d", topic_details.name.c_str(), raw_img.header.stamp.sec);
           }

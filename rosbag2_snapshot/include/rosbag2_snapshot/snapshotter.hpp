@@ -39,6 +39,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <visualization_msgs/msg/image_marker.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -314,6 +315,14 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
+  // Check if a message is inside the time interval defined by req
+  template<typename MsgType>
+  bool isMsgInsideInterval(
+      const MsgType& msg,
+      const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+      MessageQueue::queue_t::const_iterator msg_it,
+      const TopicDetails& topic_details
+  );
   // Write the parts of message_queue within the time constraints of req to the queue
   // If returns false, there was an error opening/writing the bag and an error message
   // was written to res.message

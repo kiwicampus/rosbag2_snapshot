@@ -774,7 +774,7 @@ bool Snapshotter::isMsgInsideInterval(
 {
   // Calculate time difference
   double nsec_diff = msg.header.stamp.nanosec - req->msg_timestamp.nanosec;
-  double diff_sec = std::abs(msg.header.stamp.sec - req->msg_timestamp.sec + nsec_diff * 1e-9);
+  double diff_sec = std::abs((msg.header.stamp.sec - req->msg_timestamp.sec) + (nsec_diff * 1e-9));
 
   // Check if the message is within the tolerance
   if (diff_sec > req->interval_mode_tolerance) return false;

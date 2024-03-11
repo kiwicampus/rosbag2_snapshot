@@ -229,6 +229,8 @@ public:
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
   range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end);
+  // Get a begin and end iterator into the buffer around the msg_timestamp and tolerance
+  range_t intervalFromTimesMsg(const rclcpp::Time & msg_timestamp, const double & tolerance);
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const & msg) const;

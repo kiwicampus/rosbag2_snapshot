@@ -9,6 +9,8 @@ builtin_interfaces/Time start_time   # Earliest timestamp for a message to be in
                                      # If time(0), start at the earliest message in each topic's buffer
 builtin_interfaces/Time stop_time    # Latest timestamp for a message to be included in written bag
                                      # If time(0), stop at the most recent message in each topic's buffer
+bool throttle_msgs                   # If true, use the parameter of the topic to set the period of the messages
+                                     # If false, include all messages in the time range
 bool use_interval_mode               # If true, start_time and stop_time are interpreted as an interval around msg_timestamp
                                      # If false, start_time and stop_time are interpreted as absolute times
 builtin_interfaces/Time  msg_timestamp  # Timestamp of the message that triggered the snapshot

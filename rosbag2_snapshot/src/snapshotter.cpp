@@ -686,9 +686,12 @@ bool Snapshotter::writeTopic(
       return false;
     }
       
-    if (!req->use_interval_mode && topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
+    if (!req->use_interval_mode && req->throttle_msgs && topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
-      RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period);
+      RCLCPP_DEBUG(get_logger(), 
+          "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", 
+          topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period
+      );
       continue;
     }
 

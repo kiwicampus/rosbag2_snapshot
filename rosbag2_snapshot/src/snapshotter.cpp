@@ -272,22 +272,7 @@ MessageQueue::range_t MessageQueue::intervalFromTimesMsg(Time const & msg_timest
   Time start = msg_timestamp - rclcpp::Duration::from_seconds(tolerance);
   Time stop = msg_timestamp + rclcpp::Duration::from_seconds(tolerance);
 
-  // print range
-  RCLCPP_INFO(logger_, "Interval mode: start time: %f, stop time: %f, msg time: %f, tolerance: %f", start.seconds(), stop.seconds(), msg_timestamp.seconds(), tolerance);
-
   // Check that msg_timestamp is within the range of the queue
-  if (queue_.size() > 0)
-  {
-    if (msg_timestamp > start || msg_timestamp < stop)
-    {
-      RCLCPP_WARN(logger_, "Message timestamp is outside the range of the queue.");
-    }
-  }
-  else
-  {
-    RCLCPP_ERROR(logger_, "Queue is empty.");
-  }
-  
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
     // Increment / Decrement iterators until time contraints are met
@@ -657,7 +642,7 @@ void Snapshotter::topicCb(
   }
 
   // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg, now());
+  SnapshotMessage out(msg, this->now());
   queue->push(out);
 }
 
@@ -755,8 +740,6 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
-    RCLCPP_WARN(get_logger(), "Use interval mode: %i", req->use_interval_mode);
-
     if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode)
     {
       sensor_msgs::msg::CameraInfo cam_info;
@@ -822,10 +805,6 @@ bool Snapshotter::isMsgInsideInterval(
   // Calculate time difference
   double nsec_diff = msg.header.stamp.nanosec - req->msg_timestamp.nanosec;
   double diff_sec = std::abs((msg.header.stamp.sec - req->msg_timestamp.sec) + (nsec_diff * 1e-9));
-
-  // print time difference
-  RCLCPP_INFO(get_logger(), "Time difference: %f", diff_sec);
-  RCLCPP_WARN(get_logger(), "msg time secs: %d, msg time nsecs: %d, req time secs: %d, req time nsecs: %d", msg.header.stamp.sec, msg.header.stamp.nanosec, req->msg_timestamp.sec, req->msg_timestamp.nanosec);
 
   // Check if the message is within the tolerance
   if (diff_sec > req->interval_mode_tolerance) return false;
@@ -901,7 +880,7 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
-  rclcpp::Time request_time = now();
+  rclcpp::Time request_time = this->now();
 
   // Write each selected topic's queue to bag file
   if (req->topics.size() && req->topics.at(0).name.size()) {

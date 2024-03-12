@@ -245,6 +245,7 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
 {
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
+
   
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
@@ -741,7 +742,6 @@ bool Snapshotter::writeTopic(
       sensor_msgs::msg::Image raw_img;
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
-      
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if (raw_img.encoding == "rgb8")
@@ -874,6 +874,7 @@ void Snapshotter::triggerSnapshotCb(
       {
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
       }
+
       if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + topic.type + " to bag file.";

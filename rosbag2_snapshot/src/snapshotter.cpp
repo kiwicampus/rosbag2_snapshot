@@ -690,6 +690,10 @@ bool Snapshotter::writeTopic(
   tm.serialization_format = "cdr";
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
+  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> cam_info_serializer;
+  cam_info_serializer = rclcpp::Serialization<sensor_msgs::msg::CameraInfo>();
+  rclcpp::Serialization<visualization_msgs::msg::ImageMarker> img_marker_serializer;
+  img_marker_serializer = rclcpp::Serialization<visualization_msgs::msg::ImageMarker>();
   cv_bridge::CvImagePtr cv_bridge_img;
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
@@ -737,11 +741,32 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
+    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
+    {
+      sensor_msgs::msg::CameraInfo cam_info;
+      cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
+
+      if (!isMsgInsideInterval<sensor_msgs::msg::CameraInfo>(cam_info, req, msg_it, topic_details)) continue;
+    }
+
+    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
+    {
+      visualization_msgs::msg::ImageMarker img_marker;
+      img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
+
+      if(!isMsgInsideInterval<visualization_msgs::msg::ImageMarker>(img_marker, req, msg_it, topic_details)) continue;
+    }
+
     if(topic_details.img_compression_opts_.use_compression)
     {
       sensor_msgs::msg::Image raw_img;
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
+
+      if (req->use_interval_mode && req->interval_mode_single_msg && !isMsgInsideInterval<sensor_msgs::msg::Image>(raw_img, req, msg_it, topic_details))
+      {
+        continue;
+      }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if (raw_img.encoding == "rgb8")
@@ -769,6 +794,27 @@ bool Snapshotter::writeTopic(
     }
   }
 
+  return true;
+}
+
+template<typename MsgType>
+bool Snapshotter::isMsgInsideInterval(
+  const MsgType& msg,
+  const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+  MessageQueue::queue_t::const_iterator msg_it,
+  const TopicDetails& topic_details) 
+{
+  // Calculate time difference
+  double nsec_diff = msg.header.stamp.nanosec - req->msg_timestamp.nanosec;
+  double sec_diff = msg.header.stamp.sec - req->msg_timestamp.sec;
+  double diff_sec = std::abs(sec_diff + nsec_diff * 1e-9);
+
+  // Check if the message is within the tolerance
+  if (diff_sec > req->interval_mode_tolerance) return false;
+
+  // Log message if within tolerance
+  RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %f",
+              topic_details.name.c_str(), msg_it->time.seconds());
   return true;
 }
 
@@ -841,7 +887,7 @@ void Snapshotter::triggerSnapshotCb(
 
   // Write each selected topic's queue to bag file
   if (req->topics.size() && req->topics.at(0).name.size()) {
-    if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "Using interval mode for snapshotting");
+    if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
 
       if (topic.type.empty()) {

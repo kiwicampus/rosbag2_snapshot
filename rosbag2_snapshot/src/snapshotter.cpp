@@ -741,20 +741,30 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
-    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
+    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode)
     {
       sensor_msgs::msg::CameraInfo cam_info;
       cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
 
-      if (!isMsgInsideInterval<sensor_msgs::msg::CameraInfo>(cam_info, req, msg_it, topic_details)) continue;
+      if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, req, topic_details))
+      {
+        continue;
+      }
+      else
+      {
+        break;
+      }
     }
 
-    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
+    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode)
     {
       visualization_msgs::msg::ImageMarker img_marker;
       img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
 
-      if(!isMsgInsideInterval<visualization_msgs::msg::ImageMarker>(img_marker, req, msg_it, topic_details)) continue;
+      if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, req, topic_details))
+        continue;
+      else 
+        break;
     }
 
     if(topic_details.img_compression_opts_.use_compression)
@@ -763,9 +773,12 @@ bool Snapshotter::writeTopic(
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
 
-      if (req->use_interval_mode && req->interval_mode_single_msg && !isMsgInsideInterval<sensor_msgs::msg::Image>(raw_img, req, msg_it, topic_details))
+      if (req->use_interval_mode)
       {
-        continue;
+        if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, req, topic_details))
+          continue;
+        else
+          break;
       }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
@@ -798,23 +811,14 @@ bool Snapshotter::writeTopic(
 }
 
 template<typename MsgType>
-bool Snapshotter::isMsgInsideInterval(
+bool Snapshotter::isTheSpecificMsg(
   const MsgType& msg,
   const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
-  MessageQueue::queue_t::const_iterator msg_it,
   const TopicDetails& topic_details) 
 {
-  // Calculate time difference
-  double nsec_diff = msg.header.stamp.nanosec - req->msg_timestamp.nanosec;
-  double sec_diff = msg.header.stamp.sec - req->msg_timestamp.sec;
-  double diff_sec = std::abs(sec_diff + nsec_diff * 1e-9);
+  if (msg.header.stamp != req->msg_timestamp) return false;
 
-  // Check if the message is within the tolerance
-  if (diff_sec > req->interval_mode_tolerance) return false;
-
-  // Log message if within tolerance
-  RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s with timestamp %f",
-              topic_details.name.c_str(), msg_it->time.seconds());
+  RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());
   return true;
 }
 

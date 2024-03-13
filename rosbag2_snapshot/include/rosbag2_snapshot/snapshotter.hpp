@@ -317,12 +317,11 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
-  // Check if a message is inside the time interval defined by req
+  // Check if a message is the specific we are looking for compared to the timestamp
   template<typename MsgType>
-  bool isMsgInsideInterval(
+  bool isTheSpecificMsg(
       const MsgType& msg,
       const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
-      MessageQueue::queue_t::const_iterator msg_it,
       const TopicDetails& topic_details
   );
   // Write the parts of message_queue within the time constraints of req to the queue

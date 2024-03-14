@@ -741,7 +741,7 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
-    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode)
+    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
     {
       sensor_msgs::msg::CameraInfo cam_info;
       cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
@@ -756,7 +756,7 @@ bool Snapshotter::writeTopic(
       }
     }
 
-    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode)
+    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
     {
       visualization_msgs::msg::ImageMarker img_marker;
       img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
@@ -773,7 +773,7 @@ bool Snapshotter::writeTopic(
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
 
-      if (req->use_interval_mode)
+      if (req->use_interval_mode && req->interval_mode_single_msg)
       {
         if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, req, topic_details))
           continue;

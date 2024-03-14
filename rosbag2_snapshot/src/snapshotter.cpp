@@ -747,13 +747,7 @@ bool Snapshotter::writeTopic(
       cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
 
       if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, req, topic_details))
-      {
         continue;
-      }
-      else
-      {
-        break;
-      }
     }
 
     if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
@@ -763,8 +757,6 @@ bool Snapshotter::writeTopic(
 
       if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, req, topic_details))
         continue;
-      else 
-        break;
     }
 
     if(topic_details.img_compression_opts_.use_compression)
@@ -777,8 +769,6 @@ bool Snapshotter::writeTopic(
       {
         if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, req, topic_details))
           continue;
-        else
-          break;
       }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
@@ -816,9 +806,6 @@ bool Snapshotter::isTheSpecificMsg(
   const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
   const TopicDetails& topic_details) 
 {
-  RCLCPP_INFO(get_logger(), "Checking message for topic %s", topic_details.name.c_str());
-  RCLCPP_INFO(get_logger(), "msg sec: %d, msg nanosec: %d", msg.header.stamp.sec, msg.header.stamp.nanosec);
-  RCLCPP_INFO(get_logger(), "req sec: %d, req nanosec: %d", req->msg_timestamp.sec, req->msg_timestamp.nanosec);
   if (msg.header.stamp != req->msg_timestamp) return false;
 
   RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());

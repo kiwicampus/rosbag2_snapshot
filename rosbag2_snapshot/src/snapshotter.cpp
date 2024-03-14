@@ -816,6 +816,9 @@ bool Snapshotter::isTheSpecificMsg(
   const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
   const TopicDetails& topic_details) 
 {
+  RCLCPP_INFO(get_logger(), "Checking message for topic %s", topic_details.name.c_str());
+  RCLCPP_INFO(get_logger(), "msg sec: %d, msg nanosec: %d", msg.header.stamp.sec, msg.header.stamp.nanosec);
+  RCLCPP_INFO(get_logger(), "req sec: %d, req nanosec: %d", req->msg_timestamp.sec, req->msg_timestamp.nanosec);
   if (msg.header.stamp != req->msg_timestamp) return false;
 
   RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());

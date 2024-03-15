@@ -718,14 +718,14 @@ bool Snapshotter::writeTopic(
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
         RCLCPP_WARN(get_logger(), "encoding RGB image");
-        encodeImage(cv_img, raw_img.header, now());
+        encoder_.encodeImage(cv_img, raw_img.header, now());
       }
       else
       {
         cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
         RCLCPP_WARN(get_logger(), "encoding BGR image");
-        encodeImage(cv_bridge_img->image, raw_img.header, now());
+        encoder_.encodeImage(cv_bridge_img->image, raw_img.header, now());
       }
       compressed_img.format = topic_details.img_compression_opts_.format;
       compressed_img.header = raw_img.header;
@@ -741,82 +741,6 @@ bool Snapshotter::writeTopic(
   }
 
   return true;
-}
-
-void Snapshotter::encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0)
-{
-  Lock lock(mutex_);
-  // Initialize packet
-  RCLCPP_WARN(get_logger(), "encoding 0 image");
-
-  packet_ = av_packet_alloc();
-  packet_->data = NULL;
-  packet_->size = 0;
-
-  RCLCPP_WARN(get_logger(), "encoding 0.5 image");
-
-  // create (src) frame that wraps the received uncompressed image
-  wrapperFrame_ = av_frame_alloc();
-  wrapperFrame_->width = img.cols;
-  wrapperFrame_->height = img.rows;
-  wrapperFrame_->format = AV_PIX_FMT_BGR24;
-  RCLCPP_WARN(get_logger(), "encoding 1 image");
-
-  // bend the memory pointers in colorFrame to the right locations
-  av_image_fill_arrays(
-    wrapperFrame_->data, wrapperFrame_->linesize, &(img.data[0]),
-    static_cast<AVPixelFormat>(wrapperFrame_->format), wrapperFrame_->width, wrapperFrame_->height,
-    1 /* alignment, could be better*/);
-  RCLCPP_WARN(get_logger(), "encoding 2 image");
-
-  sws_scale(
-    swsContext_, wrapperFrame_->data, wrapperFrame_->linesize, 0,  // src
-    codecContext_->height, frame_->data, frame_->linesize);        // dest
-  RCLCPP_WARN(get_logger(), "encoding 3 image");
-
-
-  frame_->pts = pts_++;  //
-  ptsToStamp_.insert(PTSMap::value_type(frame_->pts, header.stamp));
-  RCLCPP_WARN(get_logger(), "encoding 4 image");
-
-  auto ret = avcodec_send_frame(codecContext_, frame_);
-  RCLCPP_WARN(get_logger(), "encoding 5 image");
-
-  // now drain all packets
-  while (ret == 0) {
-    ret = drainPacket(header, img.cols, img.rows);
-  }
-}
-
-int Snapshotter::drainPacket(const Header & header, int width, int height)
-{
-  int ret = avcodec_receive_packet(codecContext_, packet_);
-  const AVPacket & pk = *packet_;
-  if (ret == 0 && pk.size > 0) {
-    CompressedVideo * packet = new CompressedVideo;
-    CompressedVideoConstPtr pptr(packet);
-    packet->data.resize(pk.size);
-    // packet->width = width;
-    // packet->height = height;
-    // packet->pts = pk.pts;
-    // packet->flags = pk.flags;
-    packet->format = "h264";
-    memcpy(&(packet->data[0]), pk.data, pk.size);
-    // packet->header = header;
-    packet->frame_id = header.frame_id;
-    auto it = ptsToStamp_.find(pk.pts);
-    if (it != ptsToStamp_.end()) {
-      // packet->header.stamp = it->second;
-      // packet->encoding = codecName_;
-      packet->timestamp = it->second;
-      callback_(pptr);  // deliver packet callback
-      ptsToStamp_.erase(it);
-    } else {
-      RCLCPP_ERROR_STREAM(get_logger(), "pts " << pk.pts << " has no time stamp!");
-    }
-    av_packet_unref(packet_);  // free packet allocated by encoder
-  }
-  return (ret);
 }
 
 void Snapshotter::triggerSnapshotCb(

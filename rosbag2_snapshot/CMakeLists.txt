@@ -64,8 +64,22 @@ add_library(${library_name} SHARED
   src/snapshotter.cpp
 )
 
+add_library(encoder SHARED
+  src/ffmpeg_encoder.cpp
+  src/tdiff.cpp
+  src/utils.cpp
+)
+ament_target_dependencies(encoder
+  ${DEPENDENCIES}
+)
+
 add_executable(${executable_name}
   src/main.cpp
+)
+
+target_link_libraries( ${library_name}
+  PkgConfig::LIBAV
+  encoder
 )
 
 ament_target_dependencies(${library_name}
@@ -75,6 +89,7 @@ ament_target_dependencies(${library_name}
 target_link_libraries(${executable_name}
   ${library_name}
   PkgConfig::LIBAV
+  encoder
 )
 ament_target_dependencies(${executable_name}
   ${DEPENDENCIES}
@@ -92,6 +107,12 @@ install(TARGETS ${library_name}
 
 install(TARGETS ${executable_name}
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS encoder
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
 ament_package()

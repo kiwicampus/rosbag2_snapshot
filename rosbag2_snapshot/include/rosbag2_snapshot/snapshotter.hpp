@@ -41,8 +41,6 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <ffmpeg_image_transport_msgs/msg/ffmpeg_packet.hpp>
-#include <foxglove_msgs/msg/compressed_video.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -51,26 +49,13 @@
 #include <utility>
 #include <vector>
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/opt.h>
-#include <libavutil/samplefmt.h>
-#include <libswscale/swscale.h>
-}
+#include "rosbag2_snapshot/ffmpeg_encoder.hpp"
 
 namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
-using Lock = std::unique_lock<std::recursive_mutex>;
-using CompressedVideo = foxglove_msgs::msg::CompressedVideo;
-using CompressedVideoConstPtr = CompressedVideo::ConstSharedPtr;
-using Callback = std::function<void(const CompressedVideoConstPtr & pkt)>;
-using Header = std_msgs::msg::Header;
-using PTSMap = std::unordered_map<int64_t, rclcpp::Time>;
+using namespace ffmpeg_image_transport;
 
 /* Configuration for a the compression settings of an image topic
 
@@ -291,6 +276,8 @@ private:
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_server_;
   rclcpp::TimerBase::SharedPtr poll_topic_timer_;
 
+  FFMPEGEncoder encoder_;
+
   // Convert parameter values into a SnapshotterOptions object
   void parseOptionsFromParams();
   // Replace individual topic limits with node defaults if they are
@@ -343,23 +330,6 @@ private:
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
-  /*
-    H264 compression Related
-  */
-  mutable std::recursive_mutex mutex_;
-  std::function<void(const CompressedVideoConstPtr & pkt)> callback_;
-  // ------ libav state
-  AVCodecContext * codecContext_{nullptr};
-  AVFrame * frame_{nullptr};
-  AVPacket * packet_{nullptr};
-  // ------ libswscale state
-  AVFrame * wrapperFrame_{nullptr};
-  SwsContext * swsContext_{NULL};
-  // ---------- other stuff
-  int64_t pts_{0};
-  PTSMap ptsToStamp_;
-  void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);
-  int drainPacket(const Header & header, int width, int height);
 };
 
 // Configuration for SnapshotterClient

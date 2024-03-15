@@ -308,6 +308,8 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
       std::chrono::duration(1s),
       std::bind(&Snapshotter::pollTopics, this));
   }
+
+  encoder_.setParameters(this);
 }
 
 Snapshotter::~Snapshotter()
@@ -668,7 +670,7 @@ bool Snapshotter::writeTopic(
     compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
     compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
     img_serializer = rclcpp::Serialization<sensor_msgs::msg::Image>();
-    tm.type = "sensor_msgs/msg/CompressedImage";
+    tm.type = "foxglove_msgs/msg/CompressedVideo";
   }
 
   bag_writer.create_topic(tm);
@@ -707,28 +709,36 @@ bool Snapshotter::writeTopic(
     if(topic_details.img_compression_opts_.use_compression)
     {
       sensor_msgs::msg::Image raw_img;
-      sensor_msgs::msg::CompressedImage compressed_img;
+      foxglove_msgs::msg::CompressedVideo compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
+      if (!encoder_.isInitialized())
+      {
+        if (!encoder_.initialize((int)raw_img.width, (int)raw_img.height))
+        {
+          RCLCPP_ERROR(get_logger(), "cannot initialize encoder!");
+          return false;
+        }
+      }
       if (raw_img.encoding == "rgb8")
       {
         // Create a Mat from the image message (without copying).
         cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
-        RCLCPP_WARN(get_logger(), "encoding RGB image");
         encoder_.encodeImage(cv_img, raw_img.header, now());
+        compressed_img = encoder_.getCompressedImage();
       }
       else
       {
         cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
         // cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
-        RCLCPP_WARN(get_logger(), "encoding BGR image");
         encoder_.encodeImage(cv_bridge_img->image, raw_img.header, now());
+        compressed_img = encoder_.getCompressedImage();
       }
-      compressed_img.format = topic_details.img_compression_opts_.format;
-      compressed_img.header = raw_img.header;
+      // compressed_img.format = topic_details.img_compression_opts_.format;
+      compressed_img.timestamp = raw_img.header.stamp;
       bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
     }
     else

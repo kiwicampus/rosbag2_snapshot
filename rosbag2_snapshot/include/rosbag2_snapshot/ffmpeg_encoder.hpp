@@ -108,7 +108,7 @@ public:
     Lock lock(mutex_);
     return (codecContext_ != NULL);
   }
-  bool initialize(int width, int height, Callback callback);
+  bool initialize(int width, int height, Callback callback = nullptr);
   void setLogger(rclcpp::Logger logger) { logger_ = logger; }
   void setParameters(rclcpp::Node * node);
   void reset();
@@ -118,6 +118,7 @@ public:
   // ------- performance statistics
   void printTimers(const std::string & prefix) const;
   void resetTimers();
+  foxglove_msgs::msg::CompressedVideo getCompressedImage();
 
 private:
   using PTSMap = std::unordered_map<int64_t, rclcpp::Time>;
@@ -133,6 +134,7 @@ private:
   rclcpp::Logger logger_;
   mutable std::recursive_mutex mutex_;
   std::function<void(const CompressedVideoConstPtr & pkt)> callback_;
+  CompressedVideoConstPtr pptr_;
   // config
   std::string codecName_;  // e.g. "libx264"
   std::string preset_;     // e.g. "slow", "medium", "lossless"

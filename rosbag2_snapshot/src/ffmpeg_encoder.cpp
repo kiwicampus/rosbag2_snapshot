@@ -165,8 +165,8 @@ bool FFMPEGEncoder::openCodec(int width, int height)
     closeCodec();
     return (false);
   }
-  RCLCPP_DEBUG_STREAM(
-    logger_, "intialized codec " << codecName_ << " for image: " << width << "x" << height);
+  RCLCPP_INFO_STREAM(
+    logger_, "intialized H264 codec " << codecName_ << " for image: " << width << "x" << height);
   return (true);
 }
 
@@ -315,11 +315,7 @@ void FFMPEGEncoder::encodeImage(const cv::Mat & img, const Header & header, cons
 {
   Lock lock(mutex_);
   rclcpp::Time t1, t2, t3;
-  if (measurePerformance_) {
-    frameCnt_++;
-    t1 = rclcpp::Clock().now();
-    totalInBytes_ += img.cols * img.rows;  // raw size!
-  }
+
   // bend the memory pointers in colorFrame to the right locations
   av_image_fill_arrays(
     wrapperFrame_->data, wrapperFrame_->linesize, &(img.data[0]),
@@ -328,11 +324,6 @@ void FFMPEGEncoder::encodeImage(const cv::Mat & img, const Header & header, cons
   sws_scale(
     swsContext_, wrapperFrame_->data, wrapperFrame_->linesize, 0,  // src
     codecContext_->height, frame_->data, frame_->linesize);        // dest
-
-  if (measurePerformance_) {
-    t2 = rclcpp::Clock().now();
-    tdiffFrameCopy_.update((t2 - t1).seconds());
-  }
 
   frame_->pts = pts_++;  //
   ptsToStamp_.insert(PTSMap::value_type(frame_->pts, header.stamp));
@@ -346,17 +337,9 @@ void FFMPEGEncoder::encodeImage(const cv::Mat & img, const Header & header, cons
 
   ret = avcodec_send_frame(codecContext_, usesHardwareFrames_ ? hw_frame_ : frame_);
 
-  if (measurePerformance_) {
-    t3 = rclcpp::Clock().now();
-    tdiffSendFrame_.update((t3 - t2).seconds());
-  }
   // now drain all packets
   while (ret == 0) {
     ret = drainPacket(header, img.cols, img.rows);
-  }
-  if (measurePerformance_) {
-    const rclcpp::Time t4 = rclcpp::Clock().now();
-    tdiffTotal_.update((t4 - t0).seconds());
   }
 }
 
@@ -374,7 +357,7 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
   const AVPacket & pk = *packet_;
   if (ret == 0 && pk.size > 0) {
     CompressedVideo * packet = new CompressedVideo;
-    CompressedVideoConstPtr pptr(packet);
+    pptr_ = CompressedVideoConstPtr(packet);
     packet->data.resize(pk.size);
     // packet->width = width;
     // packet->height = height;
@@ -382,11 +365,6 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
     // packet->flags = pk.flags;
     packet->format = "h264";
     memcpy(&(packet->data[0]), pk.data, pk.size);
-    if (measurePerformance_) {
-      t2 = rclcpp::Clock().now();
-      totalOutBytes_ += pk.size;
-      tdiffCopyOut_.update((t2 - t1).seconds());
-    }
     // packet->header = header;
     packet->frame_id = header.frame_id;
     auto it = ptsToStamp_.find(pk.pts);
@@ -394,11 +372,7 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
       // packet->header.stamp = it->second;
       // packet->encoding = codecName_;
       packet->timestamp = it->second;
-      callback_(pptr);  // deliver packet callback
-      if (measurePerformance_) {
-        const auto t3 = rclcpp::Clock().now();
-        tdiffPublish_.update((t3 - t2).seconds());
-      }
+    //   callback_(pptr);  // deliver packet callback
       ptsToStamp_.erase(it);
     } else {
       RCLCPP_ERROR_STREAM(logger_, "pts " << pk.pts << " has no time stamp!");
@@ -406,6 +380,16 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
     av_packet_unref(packet_);  // free packet allocated by encoder
   }
   return (ret);
+}
+
+foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
+{
+    Lock lock(mutex_);
+    if (pptr_) {
+        return (*pptr_);
+    }
+    RCLCPP_ERROR(logger_, "no compressed image available!");
+    return (foxglove_msgs::msg::CompressedVideo());
 }
 
 void FFMPEGEncoder::printTimers(const std::string & prefix) const

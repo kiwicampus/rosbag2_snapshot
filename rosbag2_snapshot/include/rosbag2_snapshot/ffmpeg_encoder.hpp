@@ -110,7 +110,7 @@ public:
   }
   bool initialize(int width, int height, Callback callback = nullptr);
   void setLogger(rclcpp::Logger logger) { logger_ = logger; }
-  void setParameters(rclcpp::Node * node);
+  void setParameters(rclcpp::Node * node, const std::string ns = "ffmpeg_image_transport.");
   void reset();
   // encode image
   void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);

@@ -83,10 +83,9 @@ AVPixelFormat FFMPEGEncoder::pixelFormat(const std::string & f) const
   return (fmt);
 }
 
-void FFMPEGEncoder::setParameters(rclcpp::Node * node)
+void FFMPEGEncoder::setParameters(rclcpp::Node * node, const std::string ns)
 {
   Lock lock(mutex_);
-  const std::string ns = "ffmpeg_image_transport.";
   codecName_ = get_safe_param<std::string>(node, ns + "encoding", "libx264");
   profile_ = get_safe_param<std::string>(node, ns + "profile", "");
   preset_ = get_safe_param<std::string>(node, ns + "preset", "");

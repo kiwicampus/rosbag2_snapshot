@@ -308,8 +308,6 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
       std::chrono::duration(1s),
       std::bind(&Snapshotter::pollTopics, this));
   }
-
-  encoder_.setParameters(this);
 }
 
 Snapshotter::~Snapshotter()
@@ -380,6 +378,30 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
           img_compression_opts.imwrite_flag_value = 3;
         } else { throw ex; }
       }
+    }
+    else if (img_compression_opts.format == "h264")
+    {
+      try{
+        std::string h264_preset = declare_parameter<std::string>(prefix + ".compression.h264_preset");
+        img_compression_opts.h264_preset = h264_preset;
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+        if (std::string{ex.what()}.find("not set") == std::string::npos) {
+          RCLCPP_INFO(get_logger(), "h264 compression enabled for topic %s but preset not specified, using h264 with default preset", topic.c_str());
+          img_compression_opts.h264_preset = "ultrafast";
+        } else { throw ex; }
+      }
+      try{
+        int h254_qmax = declare_parameter<int>(prefix + ".compression.h264_qmax");
+        img_compression_opts.h264_qmax = h254_qmax;
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
+        if (std::string{ex.what()}.find("not set") == std::string::npos) {
+          RCLCPP_INFO(get_logger(), "h264 compression enabled for topic %s but qmax not specified, using h264 with default qmax", topic.c_str());
+          img_compression_opts.h264_qmax = 10;
+        } else { throw ex; }
+      }
+      std::string node_name = get_name();
+      img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
+      img_compression_opts.encoder->setParameters(this, node_name + "." + topic + ".compression.");
     }
     // no use compression if is different than jpeg or png
     else
@@ -626,7 +648,7 @@ void Snapshotter::subscribe(
   const TopicDetails & topic_details,
   std::shared_ptr<MessageQueue> queue)
 {
-  RCLCPP_INFO(get_logger(), "Subscribing to %s", topic_details.name.c_str());
+  RCLCPP_DEBUG(get_logger(), "Subscribing to %s", topic_details.name.c_str());
 
   auto opts = rclcpp::SubscriptionOptions{};
   opts.topic_stats_options.state = rclcpp::TopicStatisticsState::Enable;
@@ -667,10 +689,17 @@ bool Snapshotter::writeTopic(
   if(topic_details.img_compression_opts_.use_compression)
   {
     RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
-    compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
-    compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
+    if (topic_details.img_compression_opts_.format == "h264")
+    {
+      tm.type = "foxglove_msgs/msg/CompressedVideo";
+    }
+    else
+    {
+      compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
+      compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
+      tm.type = "sensor_msgs/msg/CompressedImage";
+    }
     img_serializer = rclcpp::Serialization<sensor_msgs::msg::Image>();
-    tm.type = "foxglove_msgs/msg/CompressedVideo";
   }
 
   bag_writer.create_topic(tm);
@@ -708,38 +737,46 @@ bool Snapshotter::writeTopic(
     
     if(topic_details.img_compression_opts_.use_compression)
     {
+      cv::Mat cv_img;
       sensor_msgs::msg::Image raw_img;
-      foxglove_msgs::msg::CompressedVideo compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
+
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
-      if (!encoder_.isInitialized())
+      if(raw_img.encoding == "rgb8")
       {
-        if (!encoder_.initialize((int)raw_img.width, (int)raw_img.height))
-        {
-          RCLCPP_ERROR(get_logger(), "cannot initialize encoder!");
-          return false;
-        }
-      }
-      if (raw_img.encoding == "rgb8")
-      {
-        // Create a Mat from the image message (without copying).
-        cv::Mat cv_img(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
+        cv_img = cv::Mat(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
         cv::cvtColor(cv_img, cv_img, cv::COLOR_RGB2BGR);
-        // cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
-        encoder_.encodeImage(cv_img, raw_img.header, now());
-        compressed_img = encoder_.getCompressedImage();
       }
       else
       {
         cv_bridge_img = cv_bridge::toCvCopy(raw_img, raw_img.encoding);
-        // cv::imencode("." + topic_details.img_compression_opts_.format, cv_bridge_img->image, compressed_img.data, compression_params);
-        encoder_.encodeImage(cv_bridge_img->image, raw_img.header, now());
-        compressed_img = encoder_.getCompressedImage();
+        cv_img = cv_bridge_img->image;
       }
-      // compressed_img.format = topic_details.img_compression_opts_.format;
-      compressed_img.timestamp = raw_img.header.stamp;
-      bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+
+      if (topic_details.img_compression_opts_.format == "h264")
+      {
+        auto encoder = topic_details.img_compression_opts_.encoder;
+        if (!encoder->isInitialized() && !encoder->initialize((int)raw_img.width, (int)raw_img.height))
+        {
+          RCLCPP_ERROR(get_logger(), "Couldn't initialize H264 encoder!");
+          return false;
+        }
+        
+        foxglove_msgs::msg::CompressedVideo compressed_img;
+        encoder->encodeImage(cv_img, raw_img.header, now());
+        compressed_img = encoder->getCompressedImage();
+        compressed_img.timestamp = raw_img.header.stamp;
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+      }
+      else
+      {
+        sensor_msgs::msg::CompressedImage compressed_img;
+        cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
+        compressed_img.format = topic_details.img_compression_opts_.format;
+        compressed_img.header = raw_img.header;
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+      }
     }
     else
     {

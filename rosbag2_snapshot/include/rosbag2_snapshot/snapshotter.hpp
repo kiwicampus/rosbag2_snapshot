@@ -66,6 +66,9 @@ struct ImageCompressionOptions
   std::string format; // can be jpg or png
   cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
   int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+  std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
+  std::string h264_preset; // The preset to use for h264 compression
+  int h264_qmax; // The maximum quantization parameter to use for h264 compression
 };
 
 struct TopicDetails
@@ -275,8 +278,6 @@ private:
     trigger_snapshot_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_server_;
   rclcpp::TimerBase::SharedPtr poll_topic_timer_;
-
-  FFMPEGEncoder encoder_;
 
   // Convert parameter values into a SnapshotterOptions object
   void parseOptionsFromParams();

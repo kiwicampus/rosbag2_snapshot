@@ -381,27 +381,8 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
     }
     else if (img_compression_opts.format == "h264")
     {
-      try{
-        std::string h264_preset = declare_parameter<std::string>(prefix + ".compression.h264_preset");
-        img_compression_opts.h264_preset = h264_preset;
-      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-        if (std::string{ex.what()}.find("not set") == std::string::npos) {
-          RCLCPP_INFO(get_logger(), "h264 compression enabled for topic %s but preset not specified, using h264 with default preset", topic.c_str());
-          img_compression_opts.h264_preset = "ultrafast";
-        } else { throw ex; }
-      }
-      try{
-        int h254_qmax = declare_parameter<int>(prefix + ".compression.h264_qmax");
-        img_compression_opts.h264_qmax = h254_qmax;
-      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-        if (std::string{ex.what()}.find("not set") == std::string::npos) {
-          RCLCPP_INFO(get_logger(), "h264 compression enabled for topic %s but qmax not specified, using h264 with default qmax", topic.c_str());
-          img_compression_opts.h264_qmax = 10;
-        } else { throw ex; }
-      }
-      std::string node_name = get_name();
       img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
-      img_compression_opts.encoder->setParameters(this, node_name + "." + topic + ".compression.");
+      img_compression_opts.encoder->setParameters(this, prefix + ".compression.");
     }
     // no use compression if is different than jpeg or png
     else

@@ -67,8 +67,6 @@ struct ImageCompressionOptions
   cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
   int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
   std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
-  std::string h264_preset; // The preset to use for h264 compression
-  int h264_qmax; // The maximum quantization parameter to use for h264 compression
 };
 
 struct TopicDetails

@@ -379,11 +379,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
         } else { throw ex; }
       }
     }
-    else if (img_compression_opts.format == "h264")
-    {
-      img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
-      img_compression_opts.encoder->setParameters(this, prefix + ".compression.");
-    }
     // no use compression if is different than jpeg or png
     else
     {
@@ -391,6 +386,11 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
       img_compression_opts.use_compression = false;
     }
   }
+
+  // Init encoder for h264 in case any event triggers the use of h264
+  img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
+  img_compression_opts.encoder->setParameters(this, "h264.");
+
   return img_compression_opts;
 }
 
@@ -669,13 +669,14 @@ bool Snapshotter::writeTopic(
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
   {
-    RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
-    if (topic_details.img_compression_opts_.format == "h264")
+    if (req->use_h264)
     {
+      RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression");
       tm.type = "foxglove_msgs/msg/CompressedVideo";
     }
     else
     {
+      RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
       compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
       compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
       tm.type = "sensor_msgs/msg/CompressedImage";
@@ -735,7 +736,7 @@ bool Snapshotter::writeTopic(
         cv_img = cv_bridge_img->image;
       }
 
-      if (topic_details.img_compression_opts_.format == "h264")
+      if (req->use_h264)
       {
         auto encoder = topic_details.img_compression_opts_.encoder;
         if (!encoder->isInitialized() && !encoder->initialize((int)raw_img.width, (int)raw_img.height))

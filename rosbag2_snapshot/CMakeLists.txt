@@ -65,9 +65,9 @@ add_library(${library_name} SHARED
 )
 
 add_library(encoder SHARED
-  src/ffmpeg_encoder.cpp
-  src/tdiff.cpp
-  src/utils.cpp
+  src/ffmpeg_encoding/ffmpeg_encoder.cpp
+  src/ffmpeg_encoding/tdiff.cpp
+  src/ffmpeg_encoding/utils.cpp
 )
 ament_target_dependencies(encoder
   ${DEPENDENCIES}

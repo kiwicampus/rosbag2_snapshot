@@ -25,8 +25,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <unordered_map>
 
-#include "rosbag2_snapshot/tdiff.hpp"
-#include "rosbag2_snapshot/types.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/tdiff.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/types.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>

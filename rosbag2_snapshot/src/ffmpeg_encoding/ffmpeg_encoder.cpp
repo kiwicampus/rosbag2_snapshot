@@ -13,16 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "rosbag2_snapshot/ffmpeg_encoder.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/safe_param.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/utils.hpp"
 
 #include <cv_bridge/cv_bridge.hpp>
 
 #include <fstream>
 #include <iomanip>
 #include <string>
-
-#include "rosbag2_snapshot/safe_param.hpp"
-#include "rosbag2_snapshot/utils.hpp"
 
 namespace ffmpeg_image_transport
 {

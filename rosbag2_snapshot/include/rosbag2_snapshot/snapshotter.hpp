@@ -49,7 +49,7 @@
 #include <utility>
 #include <vector>
 
-#include "rosbag2_snapshot/ffmpeg_encoder.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 
 namespace rosbag2_snapshot
 {

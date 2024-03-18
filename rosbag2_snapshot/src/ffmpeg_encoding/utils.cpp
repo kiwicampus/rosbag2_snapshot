@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "rosbag2_snapshot/utils.hpp"
+#include "rosbag2_snapshot/ffmpeg_encoding/utils.hpp"
 
 #include <algorithm>
 #include <iostream>

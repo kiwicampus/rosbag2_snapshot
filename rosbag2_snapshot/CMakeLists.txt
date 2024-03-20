@@ -25,6 +25,7 @@ find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(ffmpeg_image_transport_msgs REQUIRED)
 find_package(foxglove_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
@@ -53,6 +54,7 @@ set(DEPENDENCIES
   cv_bridge
   ffmpeg_image_transport_msgs
   foxglove_msgs
+  visualization_msgs
 )
 
 set(executable_name snapshotter)

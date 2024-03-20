@@ -38,6 +38,8 @@
 #include <rosbag2_compression/sequential_compression_writer.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <visualization_msgs/msg/image_marker.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -231,6 +233,8 @@ public:
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
   range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end);
+  // Get a begin and end iterator into the buffer around the msg_timestamp and tolerance
+  range_t intervalFromTimesMsg(const rclcpp::Time & msg_timestamp, const double & tolerance);
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const & msg) const;
@@ -317,6 +321,13 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
+  // Check if a message is the specific we are looking for compared to the timestamp
+  template<typename MsgType>
+  bool isTheSpecificMsg(
+      const MsgType& msg,
+      const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+      const TopicDetails& topic_details
+  );
   // Write the parts of message_queue within the time constraints of req to the queue
   // If returns false, there was an error opening/writing the bag and an error message
   // was written to res.message

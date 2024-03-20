@@ -705,7 +705,7 @@ bool Snapshotter::writeTopic(
   {
     if (req->use_h264)
     {
-      RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression");
+      RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression", topic_details.name.c_str());
       tm.type = "foxglove_msgs/msg/CompressedVideo";
     }
     else

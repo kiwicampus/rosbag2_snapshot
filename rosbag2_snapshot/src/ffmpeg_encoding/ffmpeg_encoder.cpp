@@ -386,7 +386,6 @@ foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
     if (pptr_) {
         return (*pptr_);
     }
-    RCLCPP_ERROR(logger_, "no compressed image available!");
     return (foxglove_msgs::msg::CompressedVideo());
 }
 

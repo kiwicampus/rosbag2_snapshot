@@ -264,6 +264,33 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
   return range_t(begin, end);
 }
 
+MessageQueue::range_t MessageQueue::intervalFromTimesMsg(Time const & msg_timestamp, const double & tolerance)
+{
+  range_t::first_type begin = queue_.begin();
+  range_t::second_type end = queue_.end();
+
+  // determine start and stop times
+  Time start = msg_timestamp - rclcpp::Duration::from_seconds(tolerance);
+  Time stop = msg_timestamp + rclcpp::Duration::from_seconds(tolerance);
+
+  // Check that msg_timestamp is within the range of the queue
+  if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
+  {
+    // Increment / Decrement iterators until time contraints are met
+    if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
+      while (begin != end && (*begin).time < start) {
+        ++begin;
+      }
+    }
+    if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
+      while (end != begin && (*(end - 1)).time > stop) {
+        --end;
+      }
+    }
+  }
+  return range_t(begin, end);
+}
+
 const int Snapshotter::QUEUE_SIZE = 10;
 
 Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
@@ -616,7 +643,7 @@ void Snapshotter::topicCb(
   }
 
   // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg, now());
+  SnapshotMessage out(msg, this->now());
   queue->push(out);
 }
 
@@ -651,8 +678,11 @@ bool Snapshotter::writeTopic(
 {
   // acquire lock for this queue
   std::lock_guard l(message_queue.lock);
-
-  MessageQueue::range_t range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
+  MessageQueue::range_t range;
+  if (!req->use_interval_mode)
+    range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
+  else
+    range = message_queue.intervalFromTimesMsg(req->msg_timestamp, req->interval_mode_tolerance);
 
   rosbag2_storage::TopicMetadata tm;
   tm.name = topic_details.name;
@@ -660,6 +690,10 @@ bool Snapshotter::writeTopic(
   tm.serialization_format = "cdr";
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
+  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> cam_info_serializer;
+  cam_info_serializer = rclcpp::Serialization<sensor_msgs::msg::CameraInfo>();
+  rclcpp::Serialization<visualization_msgs::msg::ImageMarker> img_marker_serializer;
+  img_marker_serializer = rclcpp::Serialization<visualization_msgs::msg::ImageMarker>();
   cv_bridge::CvImagePtr cv_bridge_img;
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
@@ -683,9 +717,12 @@ bool Snapshotter::writeTopic(
       return false;
     }
       
-    if (topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
+    if (!req->use_interval_mode && req->throttle_msgs && topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
-      RCLCPP_DEBUG(get_logger(), "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period);
+      RCLCPP_DEBUG(get_logger(), 
+          "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", 
+          topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period
+      );
       continue;
     }
 
@@ -703,12 +740,36 @@ bool Snapshotter::writeTopic(
     {
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
-    
+
+    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
+    {
+      sensor_msgs::msg::CameraInfo cam_info;
+      cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
+
+      if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, req, topic_details))
+        continue;
+    }
+
+    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
+    {
+      visualization_msgs::msg::ImageMarker img_marker;
+      img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
+
+      if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, req, topic_details))
+        continue;
+    }
+
     if(topic_details.img_compression_opts_.use_compression)
     {
       sensor_msgs::msg::Image raw_img;
       sensor_msgs::msg::CompressedImage compressed_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
+
+      if (req->use_interval_mode && req->interval_mode_single_msg)
+      {
+        if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, req, topic_details))
+          continue;
+      }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if (raw_img.encoding == "rgb8")
@@ -736,6 +797,18 @@ bool Snapshotter::writeTopic(
     }
   }
 
+  return true;
+}
+
+template<typename MsgType>
+bool Snapshotter::isTheSpecificMsg(
+  const MsgType& msg,
+  const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+  const TopicDetails& topic_details) 
+{
+  if (msg.header.stamp != req->msg_timestamp) return false;
+
+  RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());
   return true;
 }
 
@@ -804,10 +877,11 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
-  rclcpp::Time request_time = now();
+  rclcpp::Time request_time = this->now();
 
   // Write each selected topic's queue to bag file
   if (req->topics.size() && req->topics.at(0).name.size()) {
+    if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
 
       if (topic.type.empty()) {

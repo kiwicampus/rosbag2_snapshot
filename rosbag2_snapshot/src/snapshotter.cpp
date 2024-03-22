@@ -502,7 +502,7 @@ void Snapshotter::parseOptionsFromParams()
       {
         if (std::string{ex.what()}.find("not set") == std::string::npos)
         {
-          RCLCPP_WARN(get_logger(), "Qos not defined for topic %s, using defaul qos", topic.c_str());
+          RCLCPP_DEBUG(get_logger(), "Qos not defined for topic %s, using defaul qos", topic.c_str());
         }
         topic_qos = "DEFAULT";
       } catch (const rclcpp::ParameterTypeException& ex)
@@ -721,6 +721,7 @@ bool Snapshotter::writeTopic(
   bag_writer.create_topic(tm);
 
   double prev_msg_time = 0.0;
+  auto start = std::chrono::high_resolution_clock::now();
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -828,6 +829,9 @@ bool Snapshotter::writeTopic(
       bag_writer.write(bag_message);
     }
   }
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  RCLCPP_DEBUG(get_logger(), "Encoding time: %ld ms", duration.count());
 
   return true;
 }

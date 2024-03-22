@@ -354,6 +354,7 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
   }
   const AVPacket & pk = *packet_;
   if (ret == 0 && pk.size > 0) {
+    // Kiwi Added: Channge FFMPEG packet to CompressedVideo
     CompressedVideo * packet = new CompressedVideo;
     pptr_ = CompressedVideoConstPtr(packet);
     packet->data.resize(pk.size);
@@ -367,6 +368,8 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
     packet->frame_id = header.frame_id;
     auto it = ptsToStamp_.find(pk.pts);
     if (it != ptsToStamp_.end()) {
+      // Kiwi Added: We only need the timestamp
+      // The callback is not needed as we grab the CompressedVideo from getCompressedImage()
       // packet->header.stamp = it->second;
       // packet->encoding = codecName_;
       packet->timestamp = it->second;
@@ -382,11 +385,12 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
 
 foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
 {
-    Lock lock(mutex_);
-    if (pptr_) {
-        return (*pptr_);
-    }
-    return (foxglove_msgs::msg::CompressedVideo());
+  // Kiwi Added: Return CompressedVideo for it to be added to the rosbag2_snapshot
+  Lock lock(mutex_);
+  if (pptr_) {
+      return (*pptr_);
+  }
+  return (foxglove_msgs::msg::CompressedVideo());
 }
 
 void FFMPEGEncoder::printTimers(const std::string & prefix) const

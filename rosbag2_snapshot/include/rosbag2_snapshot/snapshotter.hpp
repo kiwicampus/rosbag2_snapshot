@@ -73,6 +73,7 @@ struct TopicDetails
   std::string type;
   rclcpp::QoS qos = rclcpp::QoS(5);
   bool override_old_timestamps = false;
+  int queue_depth = -1;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
   // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;

@@ -728,10 +728,14 @@ bool Snapshotter::writeTopic(
   bag_writer.create_topic(tm);
 
   double prev_msg_time = 0.0;
-  if(topic_details.queue_depth > 0)
+  if(topic_details.queue_depth > 0 && !req->use_interval_mode)
   {
     range.first = std::max(range.first, range.second - topic_details.queue_depth);
     RCLCPP_INFO(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
+    if(topic_details.throttle_period > 0.0)
+    {
+      RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
+    }
   }
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message

@@ -312,6 +312,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.type = type;
     details.qos = pair.first.qos;
     details.override_old_timestamps = pair.first.override_old_timestamps;
+    details.queue_depth = pair.first.queue_depth;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
@@ -471,6 +472,7 @@ void Snapshotter::parseOptionsFromParams()
       ImageCompressionOptions img_compression_opts;
       std::string topic_qos{};
       bool override_old_timestamps;
+      int queue_depth = -1;
       double throttle_period = -1.0;
 
       try {
@@ -523,6 +525,18 @@ void Snapshotter::parseOptionsFromParams()
 
       try
       {
+        queue_depth = declare_parameter<int>(prefix + ".queue_depth");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        queue_depth = -1;
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        queue_depth = -1;
+      }
+
+      try
+      {
         throttle_period = declare_parameter<double>(prefix + ".throttle_period");
       }
         catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
@@ -570,6 +584,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.type = topic_type;
       dets.qos = qos_string_to_qos(topic_qos);
       dets.override_old_timestamps = override_old_timestamps;
+      dets.queue_depth = queue_depth;
       dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
       dets.throttle_period = throttle_period;
@@ -577,6 +592,11 @@ void Snapshotter::parseOptionsFromParams()
       if(dets.override_old_timestamps)
       {
         RCLCPP_WARN(get_logger(), "Old timestamps will be overriden for topic %s", topic.c_str());
+      }
+
+      if(dets.queue_depth > 0)
+      {
+        RCLCPP_WARN(get_logger(), "Queue depth is set to %i for topic %s. Only the most %i recent messages will be saved on each bag for it", dets.queue_depth, topic.c_str(), dets.queue_depth);
       }
 
       if(dets.img_compression_opts_.use_compression)
@@ -708,6 +728,15 @@ bool Snapshotter::writeTopic(
   bag_writer.create_topic(tm);
 
   double prev_msg_time = 0.0;
+  if(topic_details.queue_depth > 0 && !req->use_interval_mode)
+  {
+    range.first = std::max(range.first, range.second - topic_details.queue_depth);
+    RCLCPP_INFO(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
+    if(topic_details.throttle_period > 0.0)
+    {
+      RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
+    }
+  }
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();

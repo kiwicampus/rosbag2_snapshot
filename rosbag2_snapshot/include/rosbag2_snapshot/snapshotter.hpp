@@ -51,10 +51,13 @@
 #include <utility>
 #include <vector>
 
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+
 namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
+using namespace ffmpeg_image_transport;
 
 /* Configuration for a the compression settings of an image topic
 
@@ -65,6 +68,7 @@ struct ImageCompressionOptions
   std::string format; // can be jpg or png
   cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
   int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+  std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
 };
 
 struct TopicDetails

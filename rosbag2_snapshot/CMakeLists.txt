@@ -23,7 +23,19 @@ find_package(rosbag2_snapshot_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(ffmpeg_image_transport_msgs REQUIRED)
+find_package(foxglove_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+
+set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
+    libavcodec
+    libswresample
+    libswscale
+    libavutil
+  )
 
 include_directories(
   include
@@ -40,6 +52,8 @@ set(DEPENDENCIES
   sensor_msgs
   OpenCV
   cv_bridge
+  ffmpeg_image_transport_msgs
+  foxglove_msgs
   visualization_msgs
 )
 
@@ -52,8 +66,22 @@ add_library(${library_name} SHARED
   src/snapshotter.cpp
 )
 
+add_library(encoder SHARED
+  src/ffmpeg_encoding/ffmpeg_encoder.cpp
+  src/ffmpeg_encoding/tdiff.cpp
+  src/ffmpeg_encoding/utils.cpp
+)
+ament_target_dependencies(encoder
+  ${DEPENDENCIES}
+)
+
 add_executable(${executable_name}
   src/main.cpp
+)
+
+target_link_libraries( ${library_name}
+  PkgConfig::LIBAV
+  encoder
 )
 
 ament_target_dependencies(${library_name}
@@ -62,6 +90,8 @@ ament_target_dependencies(${library_name}
 
 target_link_libraries(${executable_name}
   ${library_name}
+  PkgConfig::LIBAV
+  encoder
 )
 ament_target_dependencies(${executable_name}
   ${DEPENDENCIES}
@@ -79,6 +109,12 @@ install(TARGETS ${library_name}
 
 install(TARGETS ${executable_name}
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS encoder
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
 ament_package()

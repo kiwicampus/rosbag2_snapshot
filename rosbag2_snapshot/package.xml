@@ -21,6 +21,8 @@
   <depend>sensor_msgs</depend>
   <depend>OpenCV</depend>
   <depend>cv_bridge</depend>
+  <depend>ffmpeg_image_transport_msgs</depend>
+  <depend>foxglove_msgs</depend>
   <depend>visualization_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>

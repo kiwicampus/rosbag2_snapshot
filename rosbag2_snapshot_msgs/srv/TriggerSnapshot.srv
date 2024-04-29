@@ -20,7 +20,8 @@ float32 interval_mode_tolerance       # Tolerance in seconds for interval mode. 
                                      # [msg_timestamp - interval_mode_tolerance, msg_timestamp + interval_mode_tolerance]
                                      # it will be included in the snapshot
 bool interval_mode_single_msg        # If true, only the message with timestamp msg_timestamp will be included in the snapshot
-                                     # If false, all messages within the interval will be included         
+                                     # If false, all messages within the interval will be included    
+string rosbag_preset_profile         # Name of the rosbag2 profile to use for the snapshot. If empty, the default profile will be used                             
 
 ---
 

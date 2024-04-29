@@ -931,7 +931,10 @@ void Snapshotter::triggerSnapshotCb(
     rosbag2_storage::StorageOptions storage_opts;
     storage_opts.storage_id = "mcap";
     storage_opts.uri = req->filename;
-    storage_opts.storage_preset_profile = options_.rosbag_preset_profile_;
+    if (req->rosbag_preset_profile != "") 
+      storage_opts.storage_preset_profile = req->rosbag_preset_profile;
+    else 
+      storage_opts.storage_preset_profile = options_.rosbag_preset_profile_;
     rosbag2_cpp::ConverterOptions converter_opts{};
     bag_writer_ptr->open(storage_opts, converter_opts);
   } catch (const std::exception & ex) {

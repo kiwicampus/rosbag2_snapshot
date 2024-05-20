@@ -83,7 +83,7 @@ struct TopicDetails
   ImageCompressionOptions img_compression_opts_;
   // max time between messages to save (in seconds)
   double throttle_period = -1.0;
-  // If true, throttle_period is ignored and all messages are saved
+  // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
 
   TopicDetails() {}

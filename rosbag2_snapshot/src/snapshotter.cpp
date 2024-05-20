@@ -316,6 +316,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
+    details.h264_throttle_skip = pair.first.h264_throttle_skip;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -479,6 +480,7 @@ void Snapshotter::parseOptionsFromParams()
       bool override_old_timestamps;
       int queue_depth = -1;
       double throttle_period = -1.0;
+      bool h264_throttle_skip = false;
 
       try {
         topic_type = declare_parameter<std::string>(prefix + ".type");
@@ -551,6 +553,18 @@ void Snapshotter::parseOptionsFromParams()
       {
         throttle_period = -1.0;
       }
+
+      try
+      {
+        h264_throttle_skip = declare_parameter<bool>(prefix + ".h264_throttle_skip");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        h264_throttle_skip = false;
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        h264_throttle_skip = false;
+      }
   
       try {
         opts.duration_limit_ = rclcpp::Duration::from_seconds(
@@ -593,6 +607,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
       dets.throttle_period = throttle_period;
+      dets.h264_throttle_skip = h264_throttle_skip;
 
       if(dets.override_old_timestamps)
       {
@@ -609,7 +624,7 @@ void Snapshotter::parseOptionsFromParams()
         RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
       }
 
-      if(dets.throttle_period > 0.0)
+      if(dets.throttle_period > 0.0 && !dets.h264_throttle_skip)
       {
         RCLCPP_INFO(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
       }
@@ -746,7 +761,7 @@ bool Snapshotter::writeTopic(
   {
     range.first = std::max(range.first, range.second - topic_details.queue_depth);
     RCLCPP_INFO(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
-    if(topic_details.throttle_period > 0.0)
+    if(topic_details.throttle_period > 0.0 && !topic_details.h264_throttle_skip)
     {
       RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
     }
@@ -760,10 +775,12 @@ bool Snapshotter::writeTopic(
       return false;
     }
       
-    if (!req->use_interval_mode && req->throttle_msgs && topic_details.throttle_period > 0.0 && msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
+    if (!req->use_interval_mode && req->throttle_msgs && !topic_details.h264_throttle_skip &&
+        topic_details.throttle_period > 0.0 &&
+        msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
-      RCLCPP_DEBUG(get_logger(), 
-          "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f", 
+      RCLCPP_DEBUG(get_logger(),
+          "topic %s is being throttled. message time: %ld, previous message time: %f, throttle_period: %f",
           topic_details.name.c_str(), msg_it->time.nanoseconds(), prev_msg_time, topic_details.throttle_period
       );
       continue;

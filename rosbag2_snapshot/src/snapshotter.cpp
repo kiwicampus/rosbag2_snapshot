@@ -774,8 +774,9 @@ bool Snapshotter::writeTopic(
       RCLCPP_ERROR(get_logger(), "Failed to assign time to rosbag message.");
       return false;
     }
-      
-    if (!req->use_interval_mode && req->throttle_msgs && !topic_details.h264_throttle_skip &&
+    
+    bool h264_throttle_skip = req->use_h264 && topic_details.h264_throttle_skip;
+    if (!req->use_interval_mode && req->throttle_msgs && !h264_throttle_skip &&
         topic_details.throttle_period > 0.0 &&
         msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {

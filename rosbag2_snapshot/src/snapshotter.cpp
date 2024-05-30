@@ -624,7 +624,7 @@ void Snapshotter::parseOptionsFromParams()
         RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
       }
 
-      if(dets.throttle_period > 0.0 && !dets.h264_throttle_skip)
+      if(dets.throttle_period > 0.0)
       {
         RCLCPP_INFO(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
       }
@@ -757,11 +757,12 @@ bool Snapshotter::writeTopic(
 
   double prev_msg_time = 0.0;
   auto start = std::chrono::high_resolution_clock::now();
+  bool h264_throttle_skip = req->use_h264 && topic_details.h264_throttle_skip;
   if(topic_details.queue_depth > 0 && !req->use_interval_mode)
   {
     range.first = std::max(range.first, range.second - topic_details.queue_depth);
     RCLCPP_INFO(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
-    if(topic_details.throttle_period > 0.0 && !topic_details.h264_throttle_skip)
+    if(topic_details.throttle_period > 0.0 && !h264_throttle_skip)
     {
       RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
     }
@@ -775,7 +776,6 @@ bool Snapshotter::writeTopic(
       return false;
     }
     
-    bool h264_throttle_skip = req->use_h264 && topic_details.h264_throttle_skip;
     if (!req->use_interval_mode && req->throttle_msgs && !h264_throttle_skip &&
         topic_details.throttle_period > 0.0 &&
         msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)

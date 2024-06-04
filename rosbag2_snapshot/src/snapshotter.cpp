@@ -678,6 +678,7 @@ void Snapshotter::topicCb(
   {
     std::shared_lock<std::shared_mutex> lock(state_lock_);
     if (!recording_) {
+      RCLCPP_ERROR(get_logger(), "Recording is paused. Not adding message to queue.");
       return;
     }
   }
@@ -924,7 +925,7 @@ void Snapshotter::triggerSnapshotCb(
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (recording_prior) {
-      // pause();
+      pause();
     }
     writing_ = true;
   }
@@ -1083,7 +1084,7 @@ void Snapshotter::enableCb(
     resume();
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    // pause();
+    pause();
   }
 
   res->success = true;

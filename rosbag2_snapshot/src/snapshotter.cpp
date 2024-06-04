@@ -112,6 +112,15 @@ void MessageQueue::setSubscriber(shared_ptr<rclcpp::GenericSubscription> sub)
   sub_ = sub;
 }
 
+std::shared_ptr<MessageQueue> MessageQueue::clone() const
+{
+  std::lock_guard<std::mutex> l(lock);
+  auto cloned = std::make_shared<MessageQueue>(this->options_, this->logger_);
+  cloned->queue_ = this->queue_; // Copy the queue
+  cloned->size_ = this->size_;   // Copy the size
+  return cloned;
+}
+
 void MessageQueue::clear()
 {
   std::lock_guard<std::mutex> l(lock);
@@ -910,37 +919,6 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
-  // Store if we were recording prior to write to restore this state after write
-  bool recording_prior{true};
-
-  {
-    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
-    recording_prior = recording_;
-    if (writing_) {
-      res->success = false;
-      res->message = "Already writing";
-      return;
-    }
-  }
-
-  {
-    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    if (recording_prior) {
-      // pause();
-    }
-    writing_ = true;
-  }
-
-  // Ensure that state is updated when function exits, regardlesss of branch path / exception events
-  RCPPUTILS_SCOPE_EXIT(
-    // Clear buffers beacuase time gaps (skipped messages) may have occured while paused
-    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    // Turn off writing flag and return recording to its state before writing
-    writing_ = false;
-    if (recording_prior) {
-      this->resume();
-    }
-  );
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
@@ -965,6 +943,17 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
+  // Vector to store cloned queues
+  std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
+
+  // Clone necessary queues
+  {
+    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    for (const auto& buffer : buffers_) {
+        cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
+    }
+  }
+
   rclcpp::Time request_time = this->now();
 
   // Write each selected topic's queue to bag file
@@ -972,66 +961,46 @@ void Snapshotter::triggerSnapshotCb(
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
 
-      if (topic.type.empty()) {
-        auto it = std::find_if(buffers_.begin(), buffers_.end(),
-          [&topic](const auto &saved_topic) {
-            return saved_topic.first.name == topic.name;
-          });
+      auto it = std::find_if(cloned_buffers.begin(), cloned_buffers.end(),
+        [&topic](const auto &saved_topic) {
+          return saved_topic.first.name == topic.name;
+        });
 
-        if (it != buffers_.end()) {
-          topic.type = it->first.type;
-          RCLCPP_DEBUG(get_logger(), "Assigned type %s to topic %s", topic.type.c_str(), topic.name.c_str());
-        }
-      }
-
-      TopicDetails details{topic.name, topic.type};
-      // Find the message queue for this topic if it exsists
-      auto found = buffers_.find(details);
-
-      if (found == buffers_.end()) {
-        RCLCPP_WARN(
-          get_logger(), "Requested topic %s is not subscribed, skipping.", topic.name.c_str());
+      if (it == cloned_buffers.end()) {
+        RCLCPP_WARN(get_logger(), "Requested topic %s is not subscribed, skipping.", topic.name.c_str());
         continue;
       }
 
-      details = found->first;
-      MessageQueue message_queue = *(found->second);
+      const TopicDetails& details = it->first;
+      std::shared_ptr<MessageQueue> message_queue = it->second;
 
-      // print size of the queue if queue size is zero
-      if (message_queue.size_ == 0)
+      if (message_queue->size_ == 0)
       {
-        RCLCPP_WARN(get_logger(), "Queue size for topic %s is %ld", topic.name.c_str(), message_queue.size_);
+        RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
 
-      if (!writeTopic(*bag_writer_ptr, message_queue, details, req, res, request_time)) {
+      if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + topic.type + " to bag file.";
         return;
       }
     }
   } else {  // If topic list empty, record all buffered topics
-    for (const buffers_t::value_type & pair : buffers_) {
-      MessageQueue message_queue = *(pair.second);
-      message_queue.refreshBuffer(request_time);
-      if (!writeTopic(*bag_writer_ptr, message_queue, pair.first, req, res, request_time)) {
+    for (const auto & pair : cloned_buffers) {
+      std::shared_ptr<MessageQueue> message_queue = pair.second;
+      message_queue->refreshBuffer(request_time);
+      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, req, res, request_time)) {
         res->success = false;
         res->message = "Failed to write topic " + pair.first.name + " to bag file.";
         return;
       }
     }
   }
-  /*
-  // If no topics were subscribed/valid/contained data, this is considered a non-success
-  if (!bag.isOpen()) {
-    res->success = false;
-    res->message = res->NO_DATA_MESSAGE;
-    return;
-  }
-  */
 
   res->success = true;
   res->message = req->filename;
 }
+
 
 void Snapshotter::clear()
 {

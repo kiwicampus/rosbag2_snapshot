@@ -209,7 +209,7 @@ private:
   // Logger for outputting ROS logging messages
   rclcpp::Logger logger_;
   // Locks access to size_ and queue_
-  std::mutex lock;
+  mutable std::mutex lock;
   // Stores limits on buffer size and duration
   SnapshotterTopicOptions options_;
   // Current total size of the queue, in bytes
@@ -243,6 +243,8 @@ public:
   int64_t getMessageSize(SnapshotMessage const & msg) const;
 
   bool refreshBuffer(rclcpp::Time const& time);
+  // Method to clone the current queue and its state
+  std::shared_ptr<MessageQueue> clone() const;
 
 private:
   // Internal push whitch does not obtain lock

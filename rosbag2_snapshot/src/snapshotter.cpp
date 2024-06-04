@@ -225,6 +225,7 @@ void MessageQueue::_push(SnapshotMessage const & _out)
   int32_t size = _out.msg->size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time)) {
+    RCLCPP_ERROR(logger_, "Message dropped. Size %i exceeds memory limit %i", size, options_.memory_limit_);
     return;
   }
   queue_.push_back(_out);
@@ -925,7 +926,7 @@ void Snapshotter::triggerSnapshotCb(
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (recording_prior) {
-      pause();
+      // pause();
     }
     writing_ = true;
   }
@@ -994,7 +995,7 @@ void Snapshotter::triggerSnapshotCb(
       }
 
       details = found->first;
-      MessageQueue & message_queue = *(found->second);
+      MessageQueue message_queue = *(found->second);
 
       // print size of the queue if queue size is zero
       if (message_queue.size_ == 0)
@@ -1010,7 +1011,7 @@ void Snapshotter::triggerSnapshotCb(
     }
   } else {  // If topic list empty, record all buffered topics
     for (const buffers_t::value_type & pair : buffers_) {
-      MessageQueue & message_queue = *(pair.second);
+      MessageQueue message_queue = *(pair.second);
       message_queue.refreshBuffer(request_time);
       if (!writeTopic(*bag_writer_ptr, message_queue, pair.first, req, res, request_time)) {
         res->success = false;
@@ -1050,15 +1051,18 @@ void Snapshotter::clear()
 
 void Snapshotter::pause()
 {
-  RCLCPP_INFO(get_logger(), "Buffering paused");
+  RCLCPP_WARN(get_logger(), "==========================================Buffering paused");
   recording_ = false;
 }
 
 void Snapshotter::resume()
 {
   clear();
-  recording_ = true;
-  RCLCPP_INFO(get_logger(), "Buffering resumed");
+  if (!recording_)
+  {
+    recording_ = true;
+    RCLCPP_INFO(get_logger(), "==========================================Buffering resumed");
+  }
 }
 
 void Snapshotter::enableCb(

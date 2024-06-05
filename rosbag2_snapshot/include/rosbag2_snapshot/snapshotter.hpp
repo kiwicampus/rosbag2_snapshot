@@ -244,7 +244,7 @@ public:
 
   bool refreshBuffer(rclcpp::Time const& time);
   // Method to clone the current queue and its state
-  std::shared_ptr<MessageQueue> clone() const;
+  std::shared_ptr<MessageQueue> clone();
 
 private:
   // Internal push whitch does not obtain lock

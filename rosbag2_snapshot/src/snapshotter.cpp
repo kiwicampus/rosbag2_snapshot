@@ -112,7 +112,7 @@ void MessageQueue::setSubscriber(shared_ptr<rclcpp::GenericSubscription> sub)
   sub_ = sub;
 }
 
-std::shared_ptr<MessageQueue> MessageQueue::clone() const
+std::shared_ptr<MessageQueue> MessageQueue::clone()
 {
   std::lock_guard<std::mutex> l(lock);
   auto cloned = std::make_shared<MessageQueue>(this->options_, this->logger_);
@@ -684,15 +684,6 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
-  // If recording is paused (or writing), exit
-  {
-    std::shared_lock<std::shared_mutex> lock(state_lock_);
-    if (!recording_) {
-      RCLCPP_ERROR(get_logger(), "Recording is paused. Not adding message to queue.");
-      return;
-    }
-  }
-
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);
@@ -727,8 +718,6 @@ bool Snapshotter::writeTopic(
   const TriggerSnapshot::Response::SharedPtr & res,
   rclcpp::Time& request_time)
 {
-  // acquire lock for this queue
-  std::lock_guard l(message_queue.lock);
   MessageQueue::range_t range;
   if (!req->use_interval_mode)
     range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
@@ -1020,18 +1009,14 @@ void Snapshotter::clear()
 
 void Snapshotter::pause()
 {
-  RCLCPP_WARN(get_logger(), "==========================================Buffering paused");
   recording_ = false;
 }
 
 void Snapshotter::resume()
 {
   clear();
-  if (!recording_)
-  {
-    recording_ = true;
-    RCLCPP_INFO(get_logger(), "==========================================Buffering resumed");
-  }
+  recording_ = true;
+  RCLCPP_INFO(get_logger(), "Buffering resumed");
 }
 
 void Snapshotter::enableCb(

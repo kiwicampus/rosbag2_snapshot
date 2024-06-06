@@ -684,6 +684,7 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100, "Received message on topic");
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);
@@ -908,10 +909,10 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
-  std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;;
+  std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
-  
+
   RCLCPP_INFO(get_logger(), "opening %s", req->filename.c_str());
 
   try {
@@ -932,21 +933,20 @@ void Snapshotter::triggerSnapshotCb(
     return;
   }
 
-  // Vector to store cloned queues
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
-
-  // Clone necessary queues
   {
     std::shared_lock<std::shared_mutex> read_lock(state_lock_);
     for (const auto& buffer : buffers_) {
-        cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
+      cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
 
-  rclcpp::Time request_time = this->now();
-
-  // Write each selected topic's queue to bag file
-  if (req->topics.size() && req->topics.at(0).name.size()) {
+  // Detach thread to prevent blocking the main thread
+  std::thread writer_thread([this, cloned_buffers, req, res, bag_writer_ptr]() mutable {
+    rclcpp::Time request_time = this->now();
+    bool success = true;
+    std::string message = req->filename;
+    if (req->topics.size() && req->topics.at(0).name.size()) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
 
@@ -967,11 +967,12 @@ void Snapshotter::triggerSnapshotCb(
       {
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, res, request_time)) {
-        res->success = false;
-        res->message = "Failed to write topic " + topic.type + " to bag file.";
-        return;
+        success = false;
+        message = "Failed to write topic " + topic.type + " to bag file.";
+        break;
       }
     }
   } else {  // If topic list empty, record all buffered topics
@@ -979,15 +980,18 @@ void Snapshotter::triggerSnapshotCb(
       std::shared_ptr<MessageQueue> message_queue = pair.second;
       message_queue->refreshBuffer(request_time);
       if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, req, res, request_time)) {
-        res->success = false;
-        res->message = "Failed to write topic " + pair.first.name + " to bag file.";
-        return;
+        success = false;
+        message = "Failed to write topic " + pair.first.name + " to bag file.";
+        break;
       }
     }
   }
 
-  res->success = true;
-  res->message = req->filename;
+    res->success = success;
+    res->message = success ? req->filename : message;
+  });
+
+  writer_thread.detach();  // Detach the thread to allow it to run independently
 }
 
 

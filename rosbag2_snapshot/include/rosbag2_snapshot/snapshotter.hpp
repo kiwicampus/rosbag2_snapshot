@@ -50,6 +50,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <thread>
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 

@@ -234,7 +234,6 @@ void MessageQueue::_push(SnapshotMessage const & _out)
   int32_t size = _out.msg->size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time)) {
-    RCLCPP_ERROR(logger_, "Message dropped. Size %i exceeds memory limit %i", size, options_.memory_limit_);
     return;
   }
   queue_.push_back(_out);
@@ -966,7 +965,6 @@ void Snapshotter::triggerSnapshotCb(
       {
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, res, request_time)) {
         success = false;
@@ -998,7 +996,8 @@ void Snapshotter::triggerSnapshotCb(
     res->message = success ? req->filename : message;
   });
 
-  writer_thread.detach();  // Detach the thread to allow it to run independently
+  // Detach the thread to allow it to run independently
+  writer_thread.detach();
 }
 
 void Snapshotter::clear()

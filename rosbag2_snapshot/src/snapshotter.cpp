@@ -684,7 +684,6 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100, "Received message on topic");
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);
@@ -912,7 +911,7 @@ void Snapshotter::triggerSnapshotCb(
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
-
+  
   RCLCPP_INFO(get_logger(), "opening %s", req->filename.c_str());
 
   try {
@@ -986,6 +985,14 @@ void Snapshotter::triggerSnapshotCb(
       }
     }
   }
+  /*
+  // If no topics were subscribed/valid/contained data, this is considered a non-success
+  if (!bag.isOpen()) {
+    res->success = false;
+    res->message = res->NO_DATA_MESSAGE;
+    return;
+  }
+  */
 
     res->success = success;
     res->message = success ? req->filename : message;
@@ -993,7 +1000,6 @@ void Snapshotter::triggerSnapshotCb(
 
   writer_thread.detach();  // Detach the thread to allow it to run independently
 }
-
 
 void Snapshotter::clear()
 {

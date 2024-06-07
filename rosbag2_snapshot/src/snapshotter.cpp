@@ -683,6 +683,7 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100, "Received message on topic");
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);
@@ -925,10 +926,10 @@ void Snapshotter::triggerSnapshotCb(
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
           get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());
-    res->success = false;
+      res->success = false;
     res->message = "Unable to open file for writing, " + std::string(ex.what());
-    return;
-  }
+        return;
+    }
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   {
@@ -996,7 +997,7 @@ void Snapshotter::triggerSnapshotCb(
   });
 
   // Detach the thread to allow it to run independently
-  writer_thread.detach();
+  writer_thread.join();
 }
 
 void Snapshotter::clear()

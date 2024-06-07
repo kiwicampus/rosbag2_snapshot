@@ -714,7 +714,6 @@ bool Snapshotter::writeTopic(
   MessageQueue & message_queue,
   const TopicDetails & topic_details,
   const TriggerSnapshot::Request::SharedPtr & req,
-  const TriggerSnapshot::Response::SharedPtr & res,
   rclcpp::Time& request_time)
 {
   MessageQueue::range_t range;
@@ -966,7 +965,7 @@ void Snapshotter::triggerSnapshotCb(
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
 
-      if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, res, request_time)) {
+      if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, request_time)) {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
@@ -976,7 +975,7 @@ void Snapshotter::triggerSnapshotCb(
     for (const auto & pair : cloned_buffers) {
       std::shared_ptr<MessageQueue> message_queue = pair.second;
       message_queue->refreshBuffer(request_time);
-      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, req, res, request_time)) {
+      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, req, request_time)) {
         success = false;
         message = "Failed to write topic " + pair.first.name + " to bag file.";
         break;

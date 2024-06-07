@@ -341,7 +341,6 @@ private:
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
     rclcpp::Time& request_time);
 
   // Get the configuration of image compression for a given topic

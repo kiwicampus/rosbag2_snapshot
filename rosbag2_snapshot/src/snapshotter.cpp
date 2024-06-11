@@ -687,7 +687,6 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100, "Received message on topic");
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);

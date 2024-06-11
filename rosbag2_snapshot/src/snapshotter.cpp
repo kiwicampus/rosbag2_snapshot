@@ -334,8 +334,12 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   }
 
   // Now that subscriptions are setup, setup service servers for writing and pausing
-  trigger_snapshot_server_ = create_service<TriggerSnapshot>(
-    "trigger_snapshot", std::bind(&Snapshotter::triggerSnapshotCb, this, _1, _2, _3));
+  trigger_snapshot_action_server_ = rclcpp_action::create_server<TriggerSnapAction>(
+      this,
+      "trigger_snapshot",
+      std::bind(&Snapshotter::handle_goal, this, _1, _2),
+      std::bind(&Snapshotter::handle_cancel, this, _1),
+      std::bind(&Snapshotter::handle_accepted, this, _1));
   enable_server_ = create_service<SetBool>(
     "enable_snapshot", std::bind(&Snapshotter::enableCb, this, _1, _2, _3));
 
@@ -714,9 +718,10 @@ bool Snapshotter::writeTopic(
   rosbag2_cpp::Writer & bag_writer,
   MessageQueue & message_queue,
   const TopicDetails & topic_details,
-  const TriggerSnapshot::Request::SharedPtr & req,
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
   rclcpp::Time& request_time)
 {
+  auto req = goal_handle->get_goal();
   MessageQueue::range_t range;
   if (!req->use_interval_mode)
     range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
@@ -806,7 +811,7 @@ bool Snapshotter::writeTopic(
       sensor_msgs::msg::CameraInfo cam_info;
       cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
 
-      if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, req, topic_details))
+      if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, goal_handle, topic_details))
         continue;
     }
 
@@ -815,7 +820,7 @@ bool Snapshotter::writeTopic(
       visualization_msgs::msg::ImageMarker img_marker;
       img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
 
-      if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, req, topic_details))
+      if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, goal_handle, topic_details))
         continue;
     }
 
@@ -827,7 +832,7 @@ bool Snapshotter::writeTopic(
 
       if (req->use_interval_mode && req->interval_mode_single_msg)
       {
-        if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, req, topic_details))
+        if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, goal_handle, topic_details))
           continue;
       }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
@@ -885,27 +890,40 @@ bool Snapshotter::writeTopic(
 template<typename MsgType>
 bool Snapshotter::isTheSpecificMsg(
   const MsgType& msg,
-  const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
   const TopicDetails& topic_details) 
 {
-  if (msg.header.stamp != req->msg_timestamp) return false;
+  if (msg.header.stamp != goal_handle->get_goal()->msg_timestamp) return false;
 
   RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());
   return true;
 }
 
-void Snapshotter::triggerSnapshotCb(
-  const std::shared_ptr<rmw_request_id_t> request_header,
-  const TriggerSnapshot::Request::SharedPtr req,
-  TriggerSnapshot::Response::SharedPtr res)
+rclcpp_action::GoalResponse Snapshotter::handle_goal(
+  const rclcpp_action::GoalUUID &,
+  std::shared_ptr<const TriggerSnapAction::Goal> goal)
 {
-  (void)request_header;
-
-  if (req->filename.empty() || !postfixFilename(req->filename)) {
-    res->success = false;
-    res->message = "Invalid filename";
-    return;
+  auto req = goal;
+  if (req->filename.empty()) {
+    // res->success = false;
+    // res->message = "Invalid filename";
+    return rclcpp_action::GoalResponse::REJECT;
   }
+
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+rclcpp_action::CancelResponse Snapshotter::handle_cancel(
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle)
+{
+  RCLCPP_INFO(this->get_logger(), "Received request to cancel goal, but there is no going back :c");
+  (void)goal_handle;
+  return rclcpp_action::CancelResponse::REJECT;
+}
+
+void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle)
+{
+  auto req = goal_handle->get_goal();
+  auto res = std::make_shared<TriggerSnapAction::Result>();
 
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
@@ -917,19 +935,16 @@ void Snapshotter::triggerSnapshotCb(
     rosbag2_storage::StorageOptions storage_opts;
     storage_opts.storage_id = "mcap";
     storage_opts.uri = req->filename;
-    if (req->rosbag_preset_profile != "") 
-      storage_opts.storage_preset_profile = req->rosbag_preset_profile;
-    else 
-      storage_opts.storage_preset_profile = options_.rosbag_preset_profile_;
+    storage_opts.storage_preset_profile = req->rosbag_preset_profile != "" ? req->rosbag_preset_profile : options_.rosbag_preset_profile_;
     rosbag2_cpp::ConverterOptions converter_opts{};
     bag_writer_ptr->open(storage_opts, converter_opts);
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
           get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());
-      res->success = false;
+    res->success = false;
     res->message = "Unable to open file for writing, " + std::string(ex.what());
-        return;
-    }
+    return goal_handle->abort(res);
+  }
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   {
@@ -940,14 +955,26 @@ void Snapshotter::triggerSnapshotCb(
   }
 
   // Detach thread to prevent blocking the main thread
-  std::thread writer_thread([this, cloned_buffers, req, res, bag_writer_ptr]() mutable {
-    rclcpp::Time request_time = this->now();
-    bool success = true;
-    std::string message = req->filename;
-    if (req->topics.size() && req->topics.at(0).name.size()) {
+  std::thread{std::bind(&Snapshotter::createBag, this, _1, _2, _3), goal_handle, cloned_buffers, bag_writer_ptr}.detach();
+}
+
+void Snapshotter::createBag(
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
+  std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers,
+  std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr)
+{
+  auto result = std::make_shared<TriggerSnapAction::Result>();
+  auto feedback = std::make_shared<TriggerSnapAction::Feedback>();
+  auto req = goal_handle->get_goal();
+
+  rclcpp::Time request_time = this->now();
+  bool success = true;
+  std::string message = req->filename;
+  float count_topics = 0.0;
+  if (req->topics.size() && req->topics.at(0).name.size()) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
-
+      count_topics++;
       auto it = std::find_if(cloned_buffers.begin(), cloned_buffers.end(),
         [&topic](const auto &saved_topic) {
           return saved_topic.first.name == topic.name;
@@ -966,7 +993,11 @@ void Snapshotter::triggerSnapshotCb(
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
 
-      if (!writeTopic(*bag_writer_ptr, *message_queue, details, req, request_time)) {
+      feedback->progress = 100 * (count_topics / req->topics.size());
+      feedback->message = "Writing topic " + topic.name + " to bag file.";
+      goal_handle->publish_feedback(feedback);
+
+      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
@@ -974,9 +1005,13 @@ void Snapshotter::triggerSnapshotCb(
     }
   } else {  // If topic list empty, record all buffered topics
     for (const auto & pair : cloned_buffers) {
+      count_topics++;
       std::shared_ptr<MessageQueue> message_queue = pair.second;
       message_queue->refreshBuffer(request_time);
-      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, req, request_time)) {
+      feedback->progress = 100 * (count_topics / cloned_buffers.size());
+      feedback->message = "Writing topic " + pair.first.name + " to bag file.";
+      goal_handle->publish_feedback(feedback);
+      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, goal_handle, request_time)) {
         success = false;
         message = "Failed to write topic " + pair.first.name + " to bag file.";
         break;
@@ -986,18 +1021,15 @@ void Snapshotter::triggerSnapshotCb(
   /*
   // If no topics were subscribed/valid/contained data, this is considered a non-success
   if (!bag.isOpen()) {
-    res->success = false;
-    res->message = res->NO_DATA_MESSAGE;
+    result->success = false;
+    result->message = result->NO_DATA_MESSAGE;
     return;
   }
   */
 
-    res->success = success;
-    res->message = success ? req->filename : message;
-  });
-
-  // Detach the thread to allow it to run independently
-  writer_thread.join();
+    result->success = success;
+    result->message = message;
+    goal_handle->succeed(result);
 }
 
 void Snapshotter::clear()

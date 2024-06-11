@@ -17,6 +17,7 @@ find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_compression REQUIRED)
 find_package(rosbag2_compression_zstd REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(rosbag2_snapshot_msgs REQUIRED)
@@ -46,6 +47,7 @@ set(DEPENDENCIES
   rosbag2_compression
   rosbag2_compression_zstd
   rclcpp
+  rclcpp_action
   rclcpp_components
   std_srvs
   rosbag2_snapshot_msgs

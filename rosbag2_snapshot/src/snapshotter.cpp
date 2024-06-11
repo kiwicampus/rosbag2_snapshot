@@ -916,7 +916,7 @@ rclcpp_action::CancelResponse Snapshotter::handle_cancel(
 {
   RCLCPP_INFO(this->get_logger(), "Received request to cancel goal, but there is no going back :c");
   (void)goal_handle;
-  return rclcpp_action::CancelResponse::REJECT;
+  return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle)
@@ -973,6 +973,13 @@ void Snapshotter::createBag(
   if (req->topics.size() && req->topics.at(0).name.size()) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : req->topics) {
+      if (goal_handle->is_canceling()) {
+        result->success = false;
+        result->message = "Rosbag creation canceled";
+        goal_handle->canceled(result);
+        RCLCPP_INFO(this->get_logger(), "Rosbag creation canceled");
+        return;
+      }
       count_topics++;
       auto it = std::find_if(cloned_buffers.begin(), cloned_buffers.end(),
         [&topic](const auto &saved_topic) {
@@ -992,29 +999,35 @@ void Snapshotter::createBag(
         RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
       }
 
-      feedback->progress = 100 * (count_topics / req->topics.size());
-      feedback->message = "Writing topic " + topic.name + " to bag file.";
-      goal_handle->publish_feedback(feedback);
-
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
       }
+      feedback->progress = 100 * (count_topics / req->topics.size());
+      feedback->message = "Writing topic " + topic.name + " to bag file.";
+      goal_handle->publish_feedback(feedback);
     }
   } else {  // If topic list empty, record all buffered topics
     for (const auto & pair : cloned_buffers) {
+      if (goal_handle->is_canceling()) {
+        result->success = false;
+        result->message = "Rosbag creation canceled";
+        goal_handle->canceled(result);
+        RCLCPP_INFO(this->get_logger(), "Rosbag creation canceled");
+        return;
+      }
       count_topics++;
       std::shared_ptr<MessageQueue> message_queue = pair.second;
       message_queue->refreshBuffer(request_time);
-      feedback->progress = 100 * (count_topics / cloned_buffers.size());
-      feedback->message = "Writing topic " + pair.first.name + " to bag file.";
-      goal_handle->publish_feedback(feedback);
       if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, goal_handle, request_time)) {
         success = false;
         message = "Failed to write topic " + pair.first.name + " to bag file.";
         break;
       }
+      feedback->progress = 100 * (count_topics / cloned_buffers.size());
+      feedback->message = "Writing topic " + pair.first.name + " to bag file.";
+      goal_handle->publish_feedback(feedback);
     }
   }
   /*

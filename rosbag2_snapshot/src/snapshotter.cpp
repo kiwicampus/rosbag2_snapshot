@@ -1002,6 +1002,7 @@ void Snapshotter::createBag(
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
       }
+      feedback->duration = (this->now() - request_time).seconds();
       feedback->progress = 100 * (count_topics / req->topics.size());
       feedback->message = "Writing topic " + topic.name + " to bag file.";
       goal_handle->publish_feedback(feedback);
@@ -1022,6 +1023,7 @@ void Snapshotter::createBag(
         message = "Failed to write topic " + pair.first.name + " to bag file.";
         break;
       }
+      feedback->duration = (this->now() - request_time).seconds();
       feedback->progress = 100 * (count_topics / cloned_buffers.size());
       feedback->message = "Writing topic " + pair.first.name + " to bag file.";
       goal_handle->publish_feedback(feedback);

@@ -31,4 +31,5 @@ string message                       # Error description if failed
 ---
 #feedback definition
 float32 progress                     # Progress of the snapshot in percentage
+float32 duration                     # Duration of the compression process in seconds
 string message                       # Current status of the snapshot

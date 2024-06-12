@@ -902,19 +902,21 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
   const rclcpp_action::GoalUUID &,
   std::shared_ptr<const TriggerSnapAction::Goal> goal)
 {
-  auto req = goal;
-  if (req->filename.empty()) {
-    // res->success = false;
-    // res->message = "Invalid filename";
+  // Check if requested ends in .bag
+  size_t ind = goal->filename.rfind(".bag");
+  if (goal->filename.empty() || ind == string::npos || ind != goal->filename.size() - 4) 
+  {
+    RCLCPP_WARN(this->get_logger(), "Rejecting request to snapshot. Empty filename or not ending in .bag");
     return rclcpp_action::GoalResponse::REJECT;
   }
 
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
+
 rclcpp_action::CancelResponse Snapshotter::handle_cancel(
   const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle)
 {
-  RCLCPP_INFO(this->get_logger(), "Received request to cancel goal, but there is no going back :c");
+  RCLCPP_INFO(this->get_logger(), "Received request to cancel snapshotting.");
   (void)goal_handle;
   return rclcpp_action::CancelResponse::ACCEPT;
 }
@@ -977,7 +979,6 @@ void Snapshotter::createBag(
         result->success = false;
         result->message = "Rosbag creation canceled";
         goal_handle->canceled(result);
-        RCLCPP_INFO(this->get_logger(), "Rosbag creation canceled");
         return;
       }
       count_topics++;
@@ -994,10 +995,7 @@ void Snapshotter::createBag(
       const TopicDetails& details = it->first;
       std::shared_ptr<MessageQueue> message_queue = it->second;
 
-      if (message_queue->size_ == 0)
-      {
-        RCLCPP_WARN(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
-      }
+      if (message_queue->size_ == 0) RCLCPP_INFO(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
         success = false;
@@ -1014,7 +1012,6 @@ void Snapshotter::createBag(
         result->success = false;
         result->message = "Rosbag creation canceled";
         goal_handle->canceled(result);
-        RCLCPP_INFO(this->get_logger(), "Rosbag creation canceled");
         return;
       }
       count_topics++;

@@ -35,7 +35,14 @@
 #include <rosbag2_snapshot_msgs/srv/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>
-
+#include <rosbag2_compression/sequential_compression_writer.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <visualization_msgs/msg/image_marker.hpp>
+#include <cv_bridge/cv_bridge.hpp>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -44,15 +51,40 @@
 #include <utility>
 #include <vector>
 
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+
 namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
+using namespace ffmpeg_image_transport;
+
+/* Configuration for a the compression settings of an image topic
+
+ */
+struct ImageCompressionOptions
+{
+  bool use_compression = false; // whether to use compression
+  std::string format; // can be jpg or png
+  cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
+  int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+  std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
+};
 
 struct TopicDetails
 {
   std::string name;
   std::string type;
+  rclcpp::QoS qos = rclcpp::QoS(5);
+  bool override_old_timestamps = false;
+  int queue_depth = -1;
+  rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
+  // compression options for image topics;
+  ImageCompressionOptions img_compression_opts_;
+  // max time between messages to save (in seconds)
+  double throttle_period = -1.0;
+  // If true and H264 enabled, throttle_period is ignored and all messages are saved
+  bool h264_throttle_skip = false;
 
   TopicDetails() {}
 
@@ -82,6 +114,14 @@ struct TopicDetails
     return msg;
   }
 };
+
+const rclcpp::QoS qos_string_to_qos(std::string str)
+{
+    if (str == "DEFAULT") return rclcpp::QoS(5);
+    if (str == "SENSOR_DATA") return rclcpp::QoS(5).best_effort();
+    if (str == "TRANSIENT_LOCAL") return rclcpp::QoS(5).durability(rclcpp::DurabilityPolicy::TransientLocal);
+    throw std::runtime_error("Unknown QoS string " + str);
+}
 
 class Snapshotter;
 
@@ -126,6 +166,8 @@ struct SnapshotterOptions
   int32_t default_memory_limit_;
   // Flag if all topics should be recorded
   bool all_topics_;
+  // Flag to tell if compression should be used
+  std::string rosbag_preset_profile_;
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations
@@ -194,9 +236,13 @@ public:
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
   range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end);
+  // Get a begin and end iterator into the buffer around the msg_timestamp and tolerance
+  range_t intervalFromTimesMsg(const rclcpp::Time & msg_timestamp, const double & tolerance);
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const & msg) const;
+
+  bool refreshBuffer(rclcpp::Time const& time);
 
 private:
   // Internal push whitch does not obtain lock
@@ -278,6 +324,13 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
+  // Check if a message is the specific we are looking for compared to the timestamp
+  template<typename MsgType>
+  bool isTheSpecificMsg(
+      const MsgType& msg,
+      const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+      const TopicDetails& topic_details
+  );
   // Write the parts of message_queue within the time constraints of req to the queue
   // If returns false, there was an error opening/writing the bag and an error message
   // was written to res.message
@@ -285,7 +338,11 @@ private:
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
     const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res);
+    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
+    rclcpp::Time& request_time);
+
+  // Get the configuration of image compression for a given topic
+  ImageCompressionOptions getCompressionOptions(std::string topic);
 };
 
 // Configuration for SnapshotterClient

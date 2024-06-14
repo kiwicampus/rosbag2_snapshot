@@ -1094,7 +1094,7 @@ void Snapshotter::enableCb(
     resume();
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    pause();
+    // pause();
   }
 
   res->success = true;

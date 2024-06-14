@@ -56,6 +56,8 @@
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+
 namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT

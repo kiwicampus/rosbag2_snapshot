@@ -30,9 +30,11 @@
 #define ROSBAG2_SNAPSHOT__SNAPSHOTTER_HPP_
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/time.hpp>
 #include <rosbag2_snapshot_msgs/msg/topic_details.hpp>
 #include <rosbag2_snapshot_msgs/srv/trigger_snapshot.hpp>
+#include <rosbag2_snapshot_msgs/action/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_compression/sequential_compression_writer.hpp>
@@ -50,6 +52,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <thread>
+
+#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 
@@ -57,6 +62,7 @@ namespace rosbag2_snapshot
 {
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
+using TriggerSnapAction = rosbag2_snapshot_msgs::action::TriggerSnapshot;
 using namespace ffmpeg_image_transport;
 
 /* Configuration for a the compression settings of an image topic
@@ -209,7 +215,7 @@ private:
   // Logger for outputting ROS logging messages
   rclcpp::Logger logger_;
   // Locks access to size_ and queue_
-  std::mutex lock;
+  mutable std::mutex lock;
   // Stores limits on buffer size and duration
   SnapshotterTopicOptions options_;
   // Current total size of the queue, in bytes
@@ -243,6 +249,8 @@ public:
   int64_t getMessageSize(SnapshotMessage const & msg) const;
 
   bool refreshBuffer(rclcpp::Time const& time);
+  // Method to clone the current queue and its state
+  std::shared_ptr<MessageQueue> clone();
 
 private:
   // Internal push whitch does not obtain lock
@@ -279,8 +287,8 @@ private:
   bool recording_;
   // True if currently writing buffers to a bag file
   bool writing_;
-  rclcpp::Service<rosbag2_snapshot_msgs::srv::TriggerSnapshot>::SharedPtr
-    trigger_snapshot_server_;
+  rclcpp_action::Server<TriggerSnapAction>::SharedPtr
+    trigger_snapshot_action_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_server_;
   rclcpp::TimerBase::SharedPtr poll_topic_timer_;
 
@@ -304,13 +312,17 @@ private:
   void topicCb(
     std::shared_ptr<const rclcpp::SerializedMessage> msg,
     std::shared_ptr<MessageQueue> queue);
-  // Service callback, write all of part of the internal buffers to a bag file
+  // Action Server callbacks, write all of part of the internal buffers to a bag file
   // according to request parameters
-  void triggerSnapshotCb(
-    const std::shared_ptr<rmw_request_id_t> request_header,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr req,
-    rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr res
-  );
+  // Handle Goal
+  rclcpp_action::GoalResponse handle_goal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const TriggerSnapAction::Goal> goal);
+  // Handle Cancel
+  rclcpp_action::CancelResponse handle_cancel(
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle);
+  // Handle Accepted
+  void handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle);
   // Service callback, enable or disable recording (storing new messages into queue).
   // Used to pause before writing
   void enableCb(
@@ -328,7 +340,7 @@ private:
   template<typename MsgType>
   bool isTheSpecificMsg(
       const MsgType& msg,
-      const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr& req,
+      const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
       const TopicDetails& topic_details
   );
   // Write the parts of message_queue within the time constraints of req to the queue
@@ -337,12 +349,16 @@ private:
   bool writeTopic(
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Request::SharedPtr & req,
-    const rosbag2_snapshot_msgs::srv::TriggerSnapshot::Response::SharedPtr & res,
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
     rclcpp::Time& request_time);
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
+  // Iter through the message queue and write the messages to the bag
+  void createBag(
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
+    std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers,
+    std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr);
 };
 
 // Configuration for SnapshotterClient

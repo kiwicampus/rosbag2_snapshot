@@ -1037,6 +1037,8 @@ void Snapshotter::createBag(
     return;
   }
   */
+    // This is to prevent damaging the data
+    bag_writer_ptr->close();
 
     result->success = success;
     result->message = message;

@@ -84,6 +84,7 @@ struct TopicDetails
   rclcpp::QoS qos = rclcpp::QoS(5);
   bool override_old_timestamps = false;
   int queue_depth = -1;
+  int old_messages_to_keep = -1;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
   // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
@@ -241,7 +242,7 @@ public:
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
-  range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end);
+  range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end, int old_messages_to_keep = -1);
   // Get a begin and end iterator into the buffer around the msg_timestamp and tolerance
   range_t intervalFromTimesMsg(const rclcpp::Time & msg_timestamp, const double & tolerance);
 

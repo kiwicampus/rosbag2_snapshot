@@ -250,7 +250,7 @@ SnapshotMessage MessageQueue::_pop()
   return tmp;
 }
 
-MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop)
+MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop, int old_messages_to_keep)
 {
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
@@ -259,15 +259,23 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
     // Increment / Decrement iterators until time contraints are met
+    range_t::first_type time_begin = begin;
     if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
-      while (begin != end && (*begin).time < start) {
-        ++begin;
+      while (time_begin != end && (*time_begin).time < start) {
+        ++time_begin;
       }
     }
     if (stop.seconds() != 0.0 || stop.nanoseconds() != 0) {
-      while (end != begin && (*(end - 1)).time > stop) {
+      while (end != time_begin && (*(end - 1)).time > stop) {
         --end;
       }
+    }
+
+    // If old_messages_to_keep is positive, include that many messages before the time window
+    if (old_messages_to_keep > 0 && time_begin != begin) {
+      begin = (time_begin - old_messages_to_keep > begin) ? time_begin - old_messages_to_keep : begin;
+    } else {
+      begin = time_begin;
     }
   }
   return range_t(begin, end);
@@ -321,6 +329,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.type = type;
     details.qos = pair.first.qos;
     details.override_old_timestamps = pair.first.override_old_timestamps;
+    details.old_messages_to_keep = pair.first.old_messages_to_keep;
     details.queue_depth = pair.first.queue_depth;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
@@ -492,6 +501,7 @@ void Snapshotter::parseOptionsFromParams()
       std::string topic_qos{};
       bool override_old_timestamps;
       int queue_depth = -1;
+      int old_messages_to_keep = -1;
       double throttle_period = -1.0;
       bool h264_throttle_skip = false;
 
@@ -557,6 +567,18 @@ void Snapshotter::parseOptionsFromParams()
 
       try
       {
+        old_messages_to_keep = declare_parameter<int>(prefix + ".old_messages_to_keep");
+      }
+        catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
+      {
+        old_messages_to_keep = -1;
+      } catch (const rclcpp::ParameterTypeException& ex)
+      {
+        old_messages_to_keep = -1;
+      }
+
+      try
+      {
         throttle_period = declare_parameter<double>(prefix + ".throttle_period");
       }
         catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex)
@@ -617,6 +639,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.qos = qos_string_to_qos(topic_qos);
       dets.override_old_timestamps = override_old_timestamps;
       dets.queue_depth = queue_depth;
+      dets.old_messages_to_keep = old_messages_to_keep;
       dets.img_compression_opts_ = img_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
       dets.throttle_period = throttle_period;
@@ -630,6 +653,11 @@ void Snapshotter::parseOptionsFromParams()
       if(dets.queue_depth > 0)
       {
         RCLCPP_WARN(get_logger(), "Queue depth is set to %i for topic %s. Only the most %i recent messages will be saved on each bag for it", dets.queue_depth, topic.c_str(), dets.queue_depth);
+      }
+
+      if(dets.old_messages_to_keep > 0)
+      {
+        RCLCPP_WARN(get_logger(), "Old messages to keep is set to %i for topic %s. %i old messages will be kept in the bag, even if they are older than the duration limit", dets.old_messages_to_keep, topic.c_str(), dets.old_messages_to_keep);
       }
 
       if(dets.img_compression_opts_.use_compression)
@@ -723,7 +751,7 @@ bool Snapshotter::writeTopic(
   auto req = goal_handle->get_goal();
   MessageQueue::range_t range;
   if (!req->use_interval_mode)
-    range = message_queue.rangeFromTimes(req->start_time, req->stop_time);
+    range = message_queue.rangeFromTimes(req->start_time, req->stop_time, topic_details.old_messages_to_keep);
   else
     range = message_queue.intervalFromTimesMsg(req->msg_timestamp, req->interval_mode_tolerance);
 

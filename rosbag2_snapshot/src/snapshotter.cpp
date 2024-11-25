@@ -822,7 +822,7 @@ bool Snapshotter::writeTopic(
 
     bag_message->topic_name = tm.name;
     rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
-    if(topic_details.override_old_timestamps && (request_time - msg_it->time) > bag_duration)
+    if((topic_details.override_old_timestamps || topic_details.old_messages_to_keep > 0) && (request_time - msg_it->time) > bag_duration)
     {
       // Put old messages at the beginning of the bag
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());

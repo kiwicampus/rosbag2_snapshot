@@ -92,6 +92,11 @@ struct TopicDetails
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
+  // compression options for image topics
+  bool compression = false;
+  std::string format = "";
+  int32_t jpg_quality = 0;
+  int32_t png_compression = 0;
 
   TopicDetails() {}
 
@@ -352,6 +357,9 @@ private:
     const TopicDetails & topic_details,
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
     rclcpp::Time& request_time);
+
+  // Override the topic details with the topic details from the goal
+  void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);

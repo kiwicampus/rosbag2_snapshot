@@ -1020,7 +1020,9 @@ void Snapshotter::createBag(
         continue;
       }
 
-      const TopicDetails& details = it->first;
+      TopicDetails& details = it->first;
+      overrideTopicDetails(topic, details);
+
       std::shared_ptr<MessageQueue> message_queue = it->second;
 
       if (message_queue->size_ == 0) RCLCPP_INFO(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
@@ -1071,6 +1073,22 @@ void Snapshotter::createBag(
     result->success = success;
     result->message = message;
     goal_handle->succeed(result);
+}
+
+void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& details)
+{
+  // Only change if override is not default
+  if (req_msg.throttle_period != -1) details.throttle_period = req_msg.throttle_period;
+  if (req_msg.h264_throttle_skip != 0) details.h264_throttle_skip = req_msg.h264_throttle_skip;
+  if (req_msg.override_old_timestamps != 0) details.override_old_timestamps = req_msg.override_old_timestamps;
+  if (req_msg.queue_depth != -1) details.queue_depth = req_msg.queue_depth;
+  if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
+
+  // Image compression
+  if (req_msg.compression != 0) details.compression = req_msg.compression;
+  if (req_msg.format != "") details.format = req_msg.format;
+  if (req_msg.jpg_quality != 0) details.jpg_quality = req_msg.jpg_quality;
+  if (req_msg.png_compression != 0) details.png_compression = req_msg.png_compression;
 }
 
 void Snapshotter::clear()

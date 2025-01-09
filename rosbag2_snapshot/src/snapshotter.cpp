@@ -1078,7 +1078,7 @@ void Snapshotter::createBag(
 void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& details)
 {
   // Only change if override is not default
-  if (req_msg.throttle_period != -1) details.throttle_period = req_msg.throttle_period;
+  if (req_msg.throttle_period != -1.0) details.throttle_period = req_msg.throttle_period;
   if (req_msg.h264_throttle_skip != -1) details.h264_throttle_skip = req_msg.h264_throttle_skip;
   if (req_msg.override_old_timestamps != -1) details.override_old_timestamps = req_msg.override_old_timestamps;
   if (req_msg.queue_depth != -1) details.queue_depth = req_msg.queue_depth;

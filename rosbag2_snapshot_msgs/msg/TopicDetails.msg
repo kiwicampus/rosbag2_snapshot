@@ -1,8 +1,8 @@
 string name     # The fully-qualified topic name
 string type     # The fully-qualified message type
 
-int32 throttle_period -1          # The period of the messages to be saved
-int8 h264_throttle_skip -1        # (int-bool) If true, the throttle_period is ignored and all messages are saved
+float32 throttle_period -1.0          # The period of the messages to be saved
+int8 h264_throttle_skip -1          # (int-bool) If true, the throttle_period is ignored and all messages are saved
 
 int8 override_old_timestamps -1      # (int-bool) This will override timestamps of old messages, placing as if they were at the beginning of the rosbag
 int32 queue_depth -1                 # The number of messages to save in the rosbag

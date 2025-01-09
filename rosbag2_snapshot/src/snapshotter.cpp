@@ -1079,16 +1079,33 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
 {
   // Only change if override is not default
   if (req_msg.throttle_period != -1) details.throttle_period = req_msg.throttle_period;
-  if (req_msg.h264_throttle_skip != 0) details.h264_throttle_skip = req_msg.h264_throttle_skip;
-  if (req_msg.override_old_timestamps != 0) details.override_old_timestamps = req_msg.override_old_timestamps;
+  if (req_msg.h264_throttle_skip != -1) details.h264_throttle_skip = req_msg.h264_throttle_skip;
+  if (req_msg.override_old_timestamps != -1) details.override_old_timestamps = req_msg.override_old_timestamps;
   if (req_msg.queue_depth != -1) details.queue_depth = req_msg.queue_depth;
   if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
 
   // Image compression
-  if (req_msg.compression != 0) details.compression = req_msg.compression;
-  if (req_msg.format != "") details.format = req_msg.format;
-  if (req_msg.jpg_quality != 0) details.jpg_quality = req_msg.jpg_quality;
-  if (req_msg.png_compression != 0) details.png_compression = req_msg.png_compression;
+  if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;
+  if (req_msg.format != "")
+  {
+    details.img_compression_opts_.format = req_msg.format;
+    if (req_msg.format == "jpg" || req_msg.format == "jpeg") 
+    {
+      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+      if (req_msg.jpg_quality != -1) details.img_compression_opts_.imwrite_flag_value = req_msg.jpg_quality;
+    } 
+    else if (req_msg.format == "png") 
+    {
+      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
+      if (req_msg.png_compression != -1) details.img_compression_opts_.imwrite_flag_value = req_msg.png_compression;
+    }
+    else 
+    {
+      RCLCPP_WARN(get_logger(), "Invalid format to override compression: %s", req_msg.format.c_str());
+      details.img_compression_opts_.use_compression = false;
+    }
+  }
+
 }
 
 void Snapshotter::clear()

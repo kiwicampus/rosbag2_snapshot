@@ -92,11 +92,6 @@ struct TopicDetails
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
-  // compression options for image topics
-  bool compression = false;
-  std::string format = "";
-  int32_t jpg_quality = 0;
-  int32_t png_compression = 0;
 
   TopicDetails() {}
 

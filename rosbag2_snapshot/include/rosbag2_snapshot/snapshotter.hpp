@@ -353,6 +353,9 @@ private:
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
     rclcpp::Time& request_time);
 
+  // Override the topic details with the topic details from the goal
+  void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);
+
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
   // Iter through the message queue and write the messages to the bag

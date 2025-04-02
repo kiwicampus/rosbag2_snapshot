@@ -1061,8 +1061,6 @@ void Snapshotter::createBag(
       goal_handle->publish_feedback(feedback);
     }
   }
-  // This is to prevent damaging the data
-  RCLCPP_INFO(get_logger(), "Closing bag writer before action success");
   
   // Create a file lock before closing
   std::string lock_file_path = req->filename + ".lock";

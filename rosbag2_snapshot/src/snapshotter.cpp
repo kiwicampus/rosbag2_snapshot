@@ -1027,7 +1027,7 @@ void Snapshotter::createBag(
 
       std::shared_ptr<MessageQueue> message_queue = it->second;
 
-      if (message_queue->size_ == 0) RCLCPP_INFO(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
+      if (message_queue->size_ == 0) RCLCPP_DEBUG(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
         success = false;

@@ -1071,7 +1071,7 @@ void Snapshotter::createBag(
     
     // Close the bag writer
     bag_writer_ptr->close();
-    RCLCPP_INFO(get_logger(), "Bag writer closed successfully");
+    RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
     
     // Remove the lock file
     std::filesystem::remove(lock_file_path);

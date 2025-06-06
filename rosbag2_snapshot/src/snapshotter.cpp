@@ -43,6 +43,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <fstream>
 
 namespace rosbag2_snapshot
 {
@@ -1025,7 +1027,7 @@ void Snapshotter::createBag(
 
       std::shared_ptr<MessageQueue> message_queue = it->second;
 
-      if (message_queue->size_ == 0) RCLCPP_INFO(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
+      if (message_queue->size_ == 0) RCLCPP_DEBUG(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
         success = false;
@@ -1059,20 +1061,29 @@ void Snapshotter::createBag(
       goal_handle->publish_feedback(feedback);
     }
   }
-  /*
-  // If no topics were subscribed/valid/contained data, this is considered a non-success
-  if (!bag.isOpen()) {
-    result->success = false;
-    result->message = result->NO_DATA_MESSAGE;
-    return;
-  }
-  */
-    // This is to prevent damaging the data
+  
+  // Create a file lock before closing
+  std::string lock_file_path = req->filename + ".lock";
+  std::ofstream lock_file(lock_file_path, std::ios::out | std::ios::trunc);
+  if (lock_file.is_open()) {
+    lock_file << std::this_thread::get_id() << std::endl;
+    lock_file.close();
+    
+    // Close the bag writer
     bag_writer_ptr->close();
+    RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
+    
+    // Remove the lock file
+    std::filesystem::remove(lock_file_path);
+  } else {
+    RCLCPP_WARN(get_logger(), "Failed to create lock file, but proceeding with close");
+    bag_writer_ptr->close();
+    RCLCPP_INFO(get_logger(), "Bag writer closed successfully");
+  }
 
-    result->success = success;
-    result->message = message;
-    goal_handle->succeed(result);
+  result->success = success;
+  result->message = message;
+  goal_handle->succeed(result);
 }
 
 void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& details)

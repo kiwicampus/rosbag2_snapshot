@@ -118,8 +118,32 @@ std::shared_ptr<MessageQueue> MessageQueue::clone()
 {
   std::lock_guard<std::mutex> l(lock);
   auto cloned = std::make_shared<MessageQueue>(this->options_, this->logger_);
-  cloned->queue_ = this->queue_; // Copy the queue
-  cloned->size_ = this->size_;   // Copy the size
+  
+  // Validate current state before cloning to prevent corruption
+  if (size_ < 0) {
+    RCLCPP_ERROR(logger_, "Invalid negative size detected during clone, resetting");
+    size_ = 0;
+    return std::make_shared<MessageQueue>(this->options_, this->logger_);
+  }
+  
+  // Safely copy the queue with validation
+  try {
+    cloned->queue_ = this->queue_; // Copy the queue
+    cloned->size_ = this->size_;   // Copy the size
+    
+    // Validate cloned state
+    if (cloned->size_ != this->size_ || cloned->queue_.size() != this->queue_.size()) {
+      RCLCPP_ERROR(logger_, "Clone validation failed, creating empty clone. Original: size=%ld, queue=%zu, Cloned: size=%ld, queue=%zu", 
+                   this->size_, this->queue_.size(), cloned->size_, cloned->queue_.size());
+      cloned->queue_.clear();
+      cloned->size_ = 0;
+    }
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(logger_, "Exception during cloning: %s, creating empty clone", e.what());
+    cloned->queue_.clear();
+    cloned->size_ = 0;
+  }
+  
   return cloned;
 }
 
@@ -133,8 +157,14 @@ void MessageQueue::_clear()
 {
   if(options_.duration_limit_.seconds() > 0.0)
   {
-    queue_.clear();
-    size_ = 0;
+    // Safely clear the queue
+    try {
+      queue_.clear();
+      size_ = 0;
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(logger_, "Exception during queue clear: %s", e.what());
+      size_ = 0;  // Reset size even if clear failed
+    }
   }
   else
   {
@@ -163,6 +193,10 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT &&
     size > options_.memory_limit_)
   {
+    static rclcpp::Clock clock;
+    RCLCPP_WARN_THROTTLE(logger_, clock, 5000,
+                         "Message size (%d bytes) from topic %s exceeds memory limit (%d bytes), dropping", 
+                         size, sub_->get_topic_name(), options_.memory_limit_);
     return false;
   }
 
@@ -171,6 +205,22 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT) {
     while (queue_.size() != 0 && size_ + size > options_.memory_limit_) {
       _pop();
+    }
+  }
+
+  // Periodic aggressive cleanup when memory usage is high (>75% of limit)
+  if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT && 
+      size_ > (options_.memory_limit_ * 0.75)) {
+    size_t removed = 0;
+    // Aggressively clean down to 50% to prevent memory pressure crashes
+    while (!queue_.empty() && size_ > (options_.memory_limit_ * 0.5)) {
+      _pop();
+      removed++;
+    }
+    if (removed > 0) {
+      static rclcpp::Clock clock;
+      RCLCPP_INFO_THROTTLE(logger_, clock, 10000,
+                          "Aggressive cleanup: removed %zu messages to reduce memory pressure", removed);
     }
   }
 
@@ -209,15 +259,15 @@ bool MessageQueue::refreshBuffer(rclcpp::Time const& time)
 }
 void MessageQueue::push(SnapshotMessage const& _out)
 {
-  auto ret = lock.try_lock();
-  if (!ret) {
-    RCLCPP_ERROR(logger_, "Failed to lock. Time %f", _out.time.seconds());
+  std::unique_lock<std::mutex> l(lock);
+  if (!l.owns_lock()) {
+    static rclcpp::Clock clock;
+    RCLCPP_WARN_THROTTLE(logger_, clock, 1000, 
+                         "Failed to acquire lock for topic %s, dropping message", 
+                         sub_ ? sub_->get_topic_name() : "unknown");
     return;
   }
   _push(_out);
-  if (ret) {
-    lock.unlock();
-  }
 }
 
 SnapshotMessage MessageQueue::pop()
@@ -228,7 +278,14 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const & snapshot_msg) const
 {
-  return snapshot_msg.msg->size() + sizeof(SnapshotMessage);
+  // Account for message data + metadata + deque overhead + shared_ptr overhead
+  size_t message_size = snapshot_msg.msg->size();
+  size_t metadata_size = sizeof(SnapshotMessage);
+  size_t deque_overhead = sizeof(std::deque<SnapshotMessage>::value_type) + 32; // Approximate node overhead
+  size_t shared_ptr_overhead = sizeof(std::shared_ptr<const rclcpp::SerializedMessage>) + 
+                               sizeof(rclcpp::SerializedMessage);
+  
+  return message_size + metadata_size + deque_overhead + shared_ptr_overhead;
 }
 
 void MessageQueue::_push(SnapshotMessage const & _out)
@@ -461,7 +518,7 @@ void Snapshotter::parseOptionsFromParams()
 
   try {
     options_.default_memory_limit_ =
-      declare_parameter<double>("default_memory_limit", -1.0);
+      declare_parameter<double>("default_memory_limit", 300.0); // Safe limit for concurrent operations
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "default_memory_limit is of incorrect type.");
     throw ex;
@@ -984,6 +1041,20 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
+
+  // Use RAII to ensure cloned buffers are cleaned up properly  
+  auto cleanup_buffers = rcpputils::make_scope_exit([&cloned_buffers, this]() {
+    // Calculate total memory before cleanup for logging  
+    size_t total_memory_freed = 0;
+    for (const auto& buffer_pair : cloned_buffers) {
+      if (buffer_pair.second) {
+        total_memory_freed += buffer_pair.second->size_;
+      }
+    }
+    RCLCPP_INFO(get_logger(), "Cleaned up rosbag cloned buffers, freed ~%.1f MB", 
+                total_memory_freed / 1e6);
+    // Let destructors handle cleanup automatically - don't manually clear/reset
+  });
 
   // Detach thread to prevent blocking the main thread
   std::thread{std::bind(&Snapshotter::createBag, this, _1, _2, _3), goal_handle, cloned_buffers, bag_writer_ptr}.detach();

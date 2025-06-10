@@ -219,7 +219,7 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
     }
     if (removed > 0) {
       static rclcpp::Clock clock;
-      RCLCPP_INFO_THROTTLE(logger_, clock, 10000,
+      RCLCPP_DEBUG_THROTTLE(logger_, clock, 10000,
                           "Aggressive cleanup: removed %zu messages to reduce memory pressure", removed);
     }
   }

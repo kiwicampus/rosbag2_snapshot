@@ -208,9 +208,9 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
     }
   }
 
-  // Periodic aggressive cleanup when memory usage is high (>75% of limit)
+  // Periodic aggressive cleanup when memory usage is high (>90% of limit)
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT && 
-      size_ > (options_.memory_limit_ * 0.75)) {
+      size_ > (options_.memory_limit_ * 0.90)) {
     size_t removed = 0;
     // Aggressively clean down to 50% to prevent memory pressure crashes
     while (!queue_.empty() && size_ > (options_.memory_limit_ * 0.5)) {

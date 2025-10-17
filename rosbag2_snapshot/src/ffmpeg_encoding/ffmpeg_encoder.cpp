@@ -94,9 +94,9 @@ void FFMPEGEncoder::setParameters(rclcpp::Node * node, const std::string ns)
   bitRate_ = get_safe_param<int64_t>(node, ns + "bit_rate", 8242880);
   GOPSize_ = get_safe_param<int64_t>(node, ns + "gop_size", 15);
   pixFormat_ = pixelFormat(get_safe_param<std::string>(node, ns + "pixel_format", ""));
-  RCLCPP_INFO_STREAM(
+  RCLCPP_DEBUG_STREAM(
     logger_, "enc: " << codecName_ << " prof: " << profile_ << " preset: " << preset_);
-  RCLCPP_INFO_STREAM(
+  RCLCPP_DEBUG_STREAM(
     logger_, "qmax: " << qmax_ << " bitrate: " << bitRate_ << " gop: " << GOPSize_);
 }
 

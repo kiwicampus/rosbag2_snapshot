@@ -537,7 +537,7 @@ void Snapshotter::parseOptionsFromParams()
     throw ex;
   }
 
-  RCLCPP_INFO(get_logger(), "using %s preset for rosbag recording", options_.rosbag_preset_profile_.c_str());
+  RCLCPP_DEBUG(get_logger(), "using %s preset for rosbag recording", options_.rosbag_preset_profile_.c_str());
 
   try {
     topics = declare_parameter<std::vector<std::string>>(
@@ -706,27 +706,27 @@ void Snapshotter::parseOptionsFromParams()
 
       if(dets.override_old_timestamps)
       {
-        RCLCPP_WARN(get_logger(), "Old timestamps will be overriden for topic %s", topic.c_str());
+        RCLCPP_DEBUG(get_logger(), "Old timestamps will be overriden for topic %s", topic.c_str());
       }
 
       if(dets.queue_depth > 0)
       {
-        RCLCPP_WARN(get_logger(), "Queue depth is set to %i for topic %s. Only the most %i recent messages will be saved on each bag for it", dets.queue_depth, topic.c_str(), dets.queue_depth);
+        RCLCPP_DEBUG(get_logger(), "Queue depth is set to %i for topic %s. Only the most %i recent messages will be saved on each bag for it", dets.queue_depth, topic.c_str(), dets.queue_depth);
       }
 
       if(dets.old_messages_to_keep > 0)
       {
-        RCLCPP_WARN(get_logger(), "Old messages to keep is set to %i for topic %s. %i old messages will be kept in the bag, even if they are older than the duration limit", dets.old_messages_to_keep, topic.c_str(), dets.old_messages_to_keep);
+        RCLCPP_DEBUG(get_logger(), "Old messages to keep is set to %i for topic %s. %i old messages will be kept in the bag, even if they are older than the duration limit", dets.old_messages_to_keep, topic.c_str(), dets.old_messages_to_keep);
       }
 
       if(dets.img_compression_opts_.use_compression)
       {
-        RCLCPP_INFO(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
+        RCLCPP_DEBUG(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
       }
 
       if(dets.throttle_period > 0.0)
       {
-        RCLCPP_INFO(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
+        RCLCPP_DEBUG(get_logger(), "Throttle period: %f for topic %s messages subsampled", dets.throttle_period, topic.c_str());
       }
 
       options_.topics_.insert(

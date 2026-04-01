@@ -793,7 +793,7 @@ void Snapshotter::subscribe(
     topic_details.name,
     topic_details.type,
     topic_details.qos,
-    std::bind(&Snapshotter::topicCb, this, _1, queue),
+    [queue, this](std::shared_ptr<const rclcpp::SerializedMessage> msg) { topicCb(msg, queue); },
     opts
   );
 
@@ -860,7 +860,7 @@ bool Snapshotter::writeTopic(
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
-    auto ret = rcutils_system_time_now(&bag_message->time_stamp);
+    auto ret = rcutils_system_time_now(&bag_message->recv_timestamp);
     if (ret != RCL_RET_OK) {
       RCLCPP_ERROR(get_logger(), "Failed to assign time to rosbag message.");
       return false;
@@ -885,11 +885,11 @@ bool Snapshotter::writeTopic(
     {
       // Put old messages at the beginning of the bag
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
-      bag_message->time_stamp = req->start_time.sec*1e9 + req->start_time.nanosec;
+      bag_message->recv_timestamp = req->start_time.sec*1e9 + req->start_time.nanosec;
     }
     else
     {
-      bag_message->time_stamp = msg_it->time.nanoseconds();
+      bag_message->recv_timestamp = msg_it->time.nanoseconds();
     }
 
     if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
@@ -947,7 +947,7 @@ bool Snapshotter::writeTopic(
         encoder->encodeImage(cv_img, raw_img.header, now());
         compressed_img = encoder->getCompressedImage();
         compressed_img.timestamp = raw_img.header.stamp;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->recv_timestamp));
       }
       else
       {
@@ -955,7 +955,7 @@ bool Snapshotter::writeTopic(
         cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
         compressed_img.format = topic_details.img_compression_opts_.format;
         compressed_img.header = raw_img.header;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->recv_timestamp));
       }
     }
     else

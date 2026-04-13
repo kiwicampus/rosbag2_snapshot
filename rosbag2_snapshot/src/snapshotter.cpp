@@ -26,14 +26,17 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#include <builtin_interfaces/msg/time.hpp>
 #include <rcpputils/scope_exit.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
 
 #include <filesystem>
 
+#include <climits>
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <iomanip>
@@ -59,6 +62,146 @@ using std::placeholders::_3;
 using std::shared_ptr;
 using std::string;
 using std_srvs::srv::SetBool;
+
+namespace
+{
+int64_t abs_duration_ns(const rclcpp::Time & a, const rclcpp::Time & b)
+{
+  return std::llabs((a - b).nanoseconds());
+}
+
+rclcpp::Time semantic_time_or_receive(
+  const builtin_interfaces::msg::Time & stamp,
+  const rclcpp::Time & receive_time)
+{
+  if (stamp.sec != 0 || stamp.nanosec != 0) {
+    return rclcpp::Time(stamp);
+  }
+  return receive_time;
+}
+
+bool builtin_time_nonzero(const builtin_interfaces::msg::Time & t)
+{
+  return t.sec != 0 || t.nanosec != 0;
+}
+
+bool builtin_time_equal(const builtin_interfaces::msg::Time & a, const builtin_interfaces::msg::Time & b)
+{
+  return a.sec == b.sec && a.nanosec == b.nanosec;
+}
+
+bool topic_uses_interval_single_msg_narrowing(const TopicDetails & details)
+{
+  if (details.type == "sensor_msgs/msg/CameraInfo") {
+    return true;
+  }
+  if (details.type == "visualization_msgs/msg/ImageMarker") {
+    return true;
+  }
+  if (details.type == "usr_msgs/msg/Detections") {
+    return true;
+  }
+  if (details.type == "sensor_msgs/msg/Image" && details.img_compression_opts_.use_compression) {
+    return true;
+  }
+  return false;
+}
+
+MessageQueue::range_t narrow_range_for_interval_single_msg(
+  MessageQueue::range_t range,
+  const TopicDetails & topic_details,
+  const builtin_interfaces::msg::Time & goal_stamp_builtin,
+  rclcpp::Logger logger)
+{
+  if (range.first == range.second) {
+    return range;
+  }
+
+  const rclcpp::Time goal_rt(goal_stamp_builtin);
+  rclcpp::Serialization<sensor_msgs::msg::Image> ser_image;
+  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> ser_cam_info;
+  rclcpp::Serialization<visualization_msgs::msg::ImageMarker> ser_marker;
+  rclcpp::Serialization<usr_msgs::msg::Detections> ser_detections;
+
+  MessageQueue::range_t::first_type exact_it = range.second;
+  MessageQueue::range_t::first_type closest_it = range.second;
+  int64_t best_abs_ns = INT64_MAX;
+
+  for (auto it = range.first; it != range.second; ++it) {
+    builtin_interfaces::msg::Time sem_builtin{};
+    rclcpp::Time candidate_rt;
+    try {
+      if (topic_details.type == "sensor_msgs/msg/Image") {
+        sensor_msgs::msg::Image img;
+        ser_image.deserialize_message(it->msg.get(), &img);
+        sem_builtin = img.header.stamp;
+        candidate_rt = semantic_time_or_receive(img.header.stamp, it->time);
+      } else if (topic_details.type == "sensor_msgs/msg/CameraInfo") {
+        sensor_msgs::msg::CameraInfo cam_info;
+        ser_cam_info.deserialize_message(it->msg.get(), &cam_info);
+        sem_builtin = cam_info.header.stamp;
+        candidate_rt = semantic_time_or_receive(cam_info.header.stamp, it->time);
+      } else if (topic_details.type == "visualization_msgs/msg/ImageMarker") {
+        visualization_msgs::msg::ImageMarker marker;
+        ser_marker.deserialize_message(it->msg.get(), &marker);
+        sem_builtin = marker.header.stamp;
+        candidate_rt = semantic_time_or_receive(marker.header.stamp, it->time);
+      } else if (topic_details.type == "usr_msgs/msg/Detections") {
+        usr_msgs::msg::Detections dets;
+        ser_detections.deserialize_message(it->msg.get(), &dets);
+        sem_builtin = dets.header.stamp;
+        candidate_rt = semantic_time_or_receive(dets.header.stamp, it->time);
+      } else {
+        continue;
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(
+        logger, "interval_mode_single_msg: skipped buffered message on %s (%s)",
+        topic_details.name.c_str(), e.what());
+      continue;
+    }
+
+    if (exact_it == range.second && builtin_time_nonzero(sem_builtin) &&
+      builtin_time_equal(sem_builtin, goal_stamp_builtin))
+    {
+      exact_it = it;
+    }
+
+    const int64_t d = abs_duration_ns(candidate_rt, goal_rt);
+    if (d < best_abs_ns) {
+      best_abs_ns = d;
+      closest_it = it;
+    }
+  }
+
+  MessageQueue::range_t::first_type chosen = range.second;
+  if (exact_it != range.second) {
+    chosen = exact_it;
+    RCLCPP_INFO(
+      logger, "[INTERVAL_MODE]: single_msg exact stamp match on topic %s",
+      topic_details.name.c_str());
+  } else if (closest_it != range.second) {
+    chosen = closest_it;
+    RCLCPP_WARN(
+      logger,
+      "[INTERVAL_MODE]: single_msg no exact stamp on topic %s; using closest (abs dt = %.3f ms). "
+      "Cross-topic dataset alignment is not guaranteed.",
+      topic_details.name.c_str(), static_cast<double>(best_abs_ns) / 1e6);
+  }
+
+  if (chosen == range.second) {
+    RCLCPP_WARN(
+      logger,
+      "interval_mode_single_msg: no message could be matched on topic %s for goal stamp",
+      topic_details.name.c_str());
+    return MessageQueue::range_t(range.second, range.second);
+  }
+
+  auto next = chosen;
+  ++next;
+  return MessageQueue::range_t(chosen, next);
+}
+}  // namespace
 
 const rclcpp::Duration SnapshotterTopicOptions::NO_DURATION_LIMIT = rclcpp::Duration(-1s);
 const int32_t SnapshotterTopicOptions::NO_MEMORY_LIMIT = -1;
@@ -820,10 +963,6 @@ bool Snapshotter::writeTopic(
   tm.serialization_format = "cdr";
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
-  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> cam_info_serializer;
-  cam_info_serializer = rclcpp::Serialization<sensor_msgs::msg::CameraInfo>();
-  rclcpp::Serialization<visualization_msgs::msg::ImageMarker> img_marker_serializer;
-  img_marker_serializer = rclcpp::Serialization<visualization_msgs::msg::ImageMarker>();
   cv_bridge::CvImagePtr cv_bridge_img;
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
@@ -856,6 +995,12 @@ bool Snapshotter::writeTopic(
     {
       RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
     }
+  }
+  if (req->use_interval_mode && req->interval_mode_single_msg &&
+    topic_uses_interval_single_msg_narrowing(topic_details))
+  {
+    range = narrow_range_for_interval_single_msg(
+      range, topic_details, req->msg_timestamp, get_logger());
   }
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
@@ -892,35 +1037,11 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
-    if (tm.type == "sensor_msgs/msg/CameraInfo" && req->use_interval_mode && req->interval_mode_single_msg)
-    {
-      sensor_msgs::msg::CameraInfo cam_info;
-      cam_info_serializer.deserialize_message(msg_it->msg.get(), &cam_info);
-
-      if (!isTheSpecificMsg<sensor_msgs::msg::CameraInfo>(cam_info, goal_handle, topic_details))
-        continue;
-    }
-
-    if (tm.type == "visualization_msgs/msg/ImageMarker" && req->use_interval_mode && req->interval_mode_single_msg)
-    {
-      visualization_msgs::msg::ImageMarker img_marker;
-      img_marker_serializer.deserialize_message(msg_it->msg.get(), &img_marker);
-
-      if(!isTheSpecificMsg<visualization_msgs::msg::ImageMarker>(img_marker, goal_handle, topic_details))
-        continue;
-    }
-
     if(topic_details.img_compression_opts_.use_compression)
     {
       cv::Mat cv_img;
       sensor_msgs::msg::Image raw_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
-
-      if (req->use_interval_mode && req->interval_mode_single_msg)
-      {
-        if (!isTheSpecificMsg<sensor_msgs::msg::Image>(raw_img, goal_handle, topic_details))
-          continue;
-      }
       // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
       // use `rbg8` encoding to `bgr8` encoding by hand.
       if(raw_img.encoding == "rgb8")
@@ -970,18 +1091,6 @@ bool Snapshotter::writeTopic(
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
   RCLCPP_DEBUG(get_logger(), "Encoding time: %ld ms", duration.count());
 
-  return true;
-}
-
-template<typename MsgType>
-bool Snapshotter::isTheSpecificMsg(
-  const MsgType& msg,
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-  const TopicDetails& topic_details) 
-{
-  if (msg.header.stamp != goal_handle->get_goal()->msg_timestamp) return false;
-
-  RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: Found message for topic %s", topic_details.name.c_str());
   return true;
 }
 

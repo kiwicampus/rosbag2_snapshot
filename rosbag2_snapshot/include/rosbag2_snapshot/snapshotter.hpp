@@ -41,6 +41,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <usr_msgs/msg/detections.hpp>
 #include <visualization_msgs/msg/image_marker.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
@@ -337,13 +338,6 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
-  // Check if a message is the specific we are looking for compared to the timestamp
-  template<typename MsgType>
-  bool isTheSpecificMsg(
-      const MsgType& msg,
-      const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-      const TopicDetails& topic_details
-  );
   // Write the parts of message_queue within the time constraints of req to the queue
   // If returns false, there was an error opening/writing the bag and an error message
   // was written to res.message

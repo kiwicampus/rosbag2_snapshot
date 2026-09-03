@@ -22,6 +22,12 @@ Buffer recent messages until triggered to write or trigger an already running in
   ros__parameters:
     default_duration_limit: 10.0           # [Optional, default=-1] Maximum time difference between newest and oldest message in seconds
     default_memory_limit: 64.0             # [Optional, default=-1] Maximum memory used by messages in each topic's buffer, in MB
+    interval_single_msg_types:             # [Optional] Message types narrowed to a single message by
+      - "sensor_msgs/msg/NavSatFix"        # interval_mode_single_msg (see TriggerSnapshot), in addition to
+                                            # CameraInfo, ImageMarker and compressed Image, which always get
+                                            # this treatment. Only types that carry a real std_msgs/Header
+                                            # with a builtin_interfaces/Time stamp qualify; others are
+                                            # ignored with a warning.
     topics: ["/topic1", "/topic2"]         # [Optional] List of topics to buffer. If empty, buffer all topics.
     topic_details:
       /topic1:

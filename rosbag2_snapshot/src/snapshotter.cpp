@@ -29,7 +29,11 @@
 #include <builtin_interfaces/msg/time.hpp>
 #include <rcpputils/scope_exit.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rmw/rmw.h>
+#include <rosbag2_cpp/typesupport_helpers.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
+#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
+#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
 #include <filesystem>
 
@@ -41,9 +45,12 @@
 #include <exception>
 #include <iomanip>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <thread>
@@ -90,21 +97,197 @@ bool builtin_time_equal(const builtin_interfaces::msg::Time & a, const builtin_i
   return a.sec == b.sec && a.nanosec == b.nanosec;
 }
 
-bool topic_uses_interval_single_msg_narrowing(const TopicDetails & details)
+namespace introspection = rosidl_typesupport_introspection_cpp;
+
+const introspection::MessageMember * find_member(
+  const introspection::MessageMembers * members, const char * name)
 {
+  if (members == nullptr) {
+    return nullptr;
+  }
+  for (uint32_t i = 0; i < members->member_count_; ++i) {
+    if (std::string(members->members_[i].name_) == name) {
+      return &members->members_[i];
+    }
+  }
+  return nullptr;
+}
+
+/// True if `member` is a non-array nested message of exactly the given type.
+bool is_message_of_type(
+  const introspection::MessageMember * member, const char * ns, const char * name)
+{
+  if (member == nullptr || member->type_id_ != introspection::ROS_TYPE_MESSAGE ||
+    member->is_array_)
+  {
+    return false;
+  }
+  auto members = static_cast<const introspection::MessageMembers *>(member->members_->data);
+  return std::string(members->message_namespace_) == ns &&
+         std::string(members->message_name_) == name;
+}
+
+/**
+ * Reads header.stamp out of a serialized message, given only its type name, no compile-time
+ * knowledge of the type needed. Only works if the message really has a std_msgs/Header with a
+ * builtin_interfaces/Time stamp; a field just named "header" or "stamp" doesn't count, we
+ * check the actual type. Anything else is cleanly rejected.
+ *
+ * This package is meant to work on any robot, so it can't depend on a robot's own message
+ * packages just to read a timestamp, the way deserializing into a hardcoded C++ type would
+ * require. Looking the type up at runtime avoids that, and works no matter where header
+ * sits in the message (some types put it last, not first).
+ *
+ * Type lookups load a shared library, so we cache the result per type name.
+ */
+class HeaderStampReader
+{
+public:
+  std::optional<builtin_interfaces::msg::Time> read(
+    const std::string & type, const rclcpp::SerializedMessage & serialized)
+  {
+    const Layout * layout = layoutFor(type);
+    if (layout == nullptr) {
+      return std::nullopt;
+    }
+
+    std::vector<uint8_t> storage(layout->members->size_of_);
+    layout->members->init_function(
+      storage.data(), rosidl_runtime_cpp::MessageInitialization::ALL);
+    RCPPUTILS_SCOPE_EXIT(layout->members->fini_function(storage.data()));
+
+    if (rmw_deserialize(
+        &serialized.get_rcl_serialized_message(), layout->type_support,
+        storage.data()) != RMW_RET_OK)
+    {
+      return std::nullopt;
+    }
+
+    const uint8_t * stamp_base = storage.data() + layout->stamp_offset;
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = *reinterpret_cast<const int32_t *>(stamp_base + layout->sec_offset);
+    stamp.nanosec = *reinterpret_cast<const uint32_t *>(stamp_base + layout->nanosec_offset);
+    return stamp;
+  }
+
+  /// Whether this type carries a std_msgs/Header with a builtin_interfaces/Time stamp,
+  /// i.e. whether read() can work on it.
+  bool hasHeader(const std::string & type) {return layoutFor(type) != nullptr;}
+
+private:
+  struct Layout
+  {
+    const introspection::MessageMembers * members{nullptr};
+    const rosidl_message_type_support_t * type_support{nullptr};
+    uint32_t stamp_offset{0};
+    uint32_t sec_offset{0};
+    uint32_t nanosec_offset{0};
+    // Keep the libraries alive for as long as the handles taken from them are used.
+    std::shared_ptr<rcpputils::SharedLibrary> introspection_library;
+    std::shared_ptr<rcpputils::SharedLibrary> type_support_library;
+  };
+
+  // Guards every access to layouts_ (lookup and insert-on-miss alike): this reader is a
+  // single shared instance, and Snapshotter runs each accepted TriggerSnapshot goal on
+  // its own detached thread (see handle_accepted), so concurrent snapshots can call in
+  // here at once. unordered_map gives no thread-safety for a concurrent insert against
+  // any other operation, including reads of a different key: an insert can rehash and
+  // touch every bucket. The lock is released before using the returned pointer: once an
+  // entry exists it is never mutated or erased again, and unordered_map guarantees
+  // references to existing elements stay valid across later inserts, so reading through
+  // the pointer afterward (the actual deserialization work) needs no lock.
+  const Layout * layoutFor(const std::string & type)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto cached = layouts_.find(type);
+    if (cached != layouts_.end()) {
+      return cached->second ? &cached->second.value() : nullptr;
+    }
+    auto & slot = layouts_[type];
+    slot = buildLayout(type);
+    return slot ? &slot.value() : nullptr;
+  }
+
+  static std::optional<Layout> buildLayout(const std::string & type)
+  {
+    Layout layout{};
+    try {
+      layout.introspection_library = rosbag2_cpp::get_typesupport_library(
+        type, "rosidl_typesupport_introspection_cpp");
+      const auto * introspection_support = rosbag2_cpp::get_typesupport_handle(
+        type, "rosidl_typesupport_introspection_cpp", layout.introspection_library);
+      layout.members =
+        static_cast<const introspection::MessageMembers *>(introspection_support->data);
+
+      layout.type_support_library =
+        rosbag2_cpp::get_typesupport_library(type, "rosidl_typesupport_cpp");
+      layout.type_support = rosbag2_cpp::get_typesupport_handle(
+        type, "rosidl_typesupport_cpp", layout.type_support_library);
+    } catch (const std::exception &) {
+      return std::nullopt;
+    }
+
+    // Scoped exclusively to a real std_msgs/Header wrapping a real builtin_interfaces/Time.
+    // A field merely named "header" or "stamp" of some other type does not qualify.
+    const auto * header = find_member(layout.members, "header");
+    if (!is_message_of_type(header, "std_msgs::msg", "Header")) {
+      return std::nullopt;
+    }
+    const auto * header_members =
+      static_cast<const introspection::MessageMembers *>(header->members_->data);
+    const auto * stamp = find_member(header_members, "stamp");
+    if (!is_message_of_type(stamp, "builtin_interfaces::msg", "Time")) {
+      return std::nullopt;
+    }
+    const auto * stamp_members =
+      static_cast<const introspection::MessageMembers *>(stamp->members_->data);
+    const auto * sec = find_member(stamp_members, "sec");
+    const auto * nanosec = find_member(stamp_members, "nanosec");
+    if (sec == nullptr || nanosec == nullptr) {
+      return std::nullopt;
+    }
+
+    layout.stamp_offset = header->offset_ + stamp->offset_;
+    layout.sec_offset = sec->offset_;
+    layout.nanosec_offset = nanosec->offset_;
+    return layout;
+  }
+
+  std::mutex mutex_;
+  std::unordered_map<std::string, std::optional<Layout>> layouts_;
+};
+
+HeaderStampReader & header_stamp_reader()
+{
+  static HeaderStampReader reader;
+  return reader;
+}
+
+bool topic_uses_interval_single_msg_narrowing(
+  const TopicDetails & details,
+  const std::unordered_set<std::string> & interval_single_msg_types)
+{
+  // Built-in, unconditional: these narrowed before this package took a config-driven
+  // approach to eligibility, so keeping them hardcoded avoids silently dropping that
+  // behavior for any deployment that upgrades without also listing them in
+  // interval_single_msg_types. Both come from sensor_msgs/visualization_msgs, which this
+  // package already depends on regardless of which robot it runs on, so hardcoding them
+  // doesn't break the "no robot-specific dependencies" goal the way a robot's own message
+  // type would.
   if (details.type == "sensor_msgs/msg/CameraInfo") {
     return true;
   }
   if (details.type == "visualization_msgs/msg/ImageMarker") {
     return true;
   }
-  if (details.type == "usr_msgs/msg/Detections") {
-    return true;
+  // Compressed Image topics (h264 or jpg/png) always narrow to a single message. This is
+  // unconditional too, unlike everything else below which is opt-in via config.
+  if (details.type == "sensor_msgs/msg/Image") {
+    return details.img_compression_opts_.use_compression;
   }
-  if (details.type == "sensor_msgs/msg/Image" && details.img_compression_opts_.use_compression) {
-    return true;
-  }
-  return false;
+  // Everything else is explicit opt-in: this package works on any robot, so it can't know
+  // a robot's own message types up front. Each deployment lists the ones it wants here.
+  return interval_single_msg_types.count(details.type) > 0;
 }
 
 MessageQueue::range_t narrow_range_for_interval_single_msg(
@@ -118,10 +301,15 @@ MessageQueue::range_t narrow_range_for_interval_single_msg(
   }
 
   const rclcpp::Time goal_rt(goal_stamp_builtin);
-  rclcpp::Serialization<sensor_msgs::msg::Image> ser_image;
-  rclcpp::Serialization<sensor_msgs::msg::CameraInfo> ser_cam_info;
-  rclcpp::Serialization<visualization_msgs::msg::ImageMarker> ser_marker;
-  rclcpp::Serialization<usr_msgs::msg::Detections> ser_detections;
+
+  if (!header_stamp_reader().hasHeader(topic_details.type)) {
+    RCLCPP_WARN(
+      logger,
+      "interval_mode_single_msg: type %s on topic %s has no std_msgs/Header with a "
+      "builtin_interfaces/Time stamp; cannot narrow to a single message",
+      topic_details.type.c_str(), topic_details.name.c_str());
+    return range;
+  }
 
   MessageQueue::range_t::first_type exact_it = range.second;
   MessageQueue::range_t::first_type closest_it = range.second;
@@ -131,29 +319,12 @@ MessageQueue::range_t narrow_range_for_interval_single_msg(
     builtin_interfaces::msg::Time sem_builtin{};
     rclcpp::Time candidate_rt;
     try {
-      if (topic_details.type == "sensor_msgs/msg/Image") {
-        sensor_msgs::msg::Image img;
-        ser_image.deserialize_message(it->msg.get(), &img);
-        sem_builtin = img.header.stamp;
-        candidate_rt = semantic_time_or_receive(img.header.stamp, it->time);
-      } else if (topic_details.type == "sensor_msgs/msg/CameraInfo") {
-        sensor_msgs::msg::CameraInfo cam_info;
-        ser_cam_info.deserialize_message(it->msg.get(), &cam_info);
-        sem_builtin = cam_info.header.stamp;
-        candidate_rt = semantic_time_or_receive(cam_info.header.stamp, it->time);
-      } else if (topic_details.type == "visualization_msgs/msg/ImageMarker") {
-        visualization_msgs::msg::ImageMarker marker;
-        ser_marker.deserialize_message(it->msg.get(), &marker);
-        sem_builtin = marker.header.stamp;
-        candidate_rt = semantic_time_or_receive(marker.header.stamp, it->time);
-      } else if (topic_details.type == "usr_msgs/msg/Detections") {
-        usr_msgs::msg::Detections dets;
-        ser_detections.deserialize_message(it->msg.get(), &dets);
-        sem_builtin = dets.header.stamp;
-        candidate_rt = semantic_time_or_receive(dets.header.stamp, it->time);
-      } else {
+      auto stamp = header_stamp_reader().read(topic_details.type, *it->msg);
+      if (!stamp) {
         continue;
       }
+      sem_builtin = *stamp;
+      candidate_rt = semantic_time_or_receive(sem_builtin, it->time);
     } catch (const std::exception & e) {
       RCLCPP_WARN(
         logger, "interval_mode_single_msg: skipped buffered message on %s (%s)",
@@ -683,6 +854,18 @@ void Snapshotter::parseOptionsFromParams()
   RCLCPP_DEBUG(get_logger(), "using %s preset for rosbag recording", options_.rosbag_preset_profile_.c_str());
 
   try {
+    auto interval_single_msg_types = declare_parameter<std::vector<std::string>>(
+      "interval_single_msg_types", std::vector<std::string>{});
+    options_.interval_single_msg_types_ = std::unordered_set<std::string>(
+      interval_single_msg_types.begin(), interval_single_msg_types.end());
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    if (std::string{ex.what()}.find("not set") == std::string::npos) {
+      RCLCPP_ERROR(get_logger(), "interval_single_msg_types must be an array of strings.");
+      throw ex;
+    }
+  }
+
+  try {
     topics = declare_parameter<std::vector<std::string>>(
       "topics", std::vector<std::string>{});
   } catch (const rclcpp::ParameterTypeException & ex) {
@@ -997,7 +1180,7 @@ bool Snapshotter::writeTopic(
     }
   }
   if (req->use_interval_mode && req->interval_mode_single_msg &&
-    topic_uses_interval_single_msg_narrowing(topic_details))
+    topic_uses_interval_single_msg_narrowing(topic_details, options_.interval_single_msg_types_))
   {
     range = narrow_range_for_interval_single_msg(
       range, topic_details, req->msg_timestamp, get_logger());

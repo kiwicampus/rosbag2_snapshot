@@ -41,7 +41,6 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <usr_msgs/msg/detections.hpp>
 #include <visualization_msgs/msg/image_marker.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
@@ -51,6 +50,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <thread>
@@ -176,6 +176,11 @@ struct SnapshotterOptions
   bool all_topics_;
   // Flag to tell if compression should be used
   std::string rosbag_preset_profile_;
+  // Message types to narrow down to one message in interval mode. This package is meant
+  // to work on any robot, so it can't hardcode a robot's own message types; instead each
+  // deployment lists its own here (interval_single_msg_types param). Only works for types
+  // that really have a header.stamp, see HeaderStampReader.
+  std::unordered_set<std::string> interval_single_msg_types_;
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations

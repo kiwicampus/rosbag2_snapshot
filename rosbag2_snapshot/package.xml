@@ -16,14 +16,16 @@
   <depend>rosbag2_compression_zstd</depend>
   <depend>rosbag2_snapshot_msgs</depend>
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <depend>rclcpp_components</depend>
+  <depend>rmw</depend>
   <depend>std_srvs</depend>
   <depend>sensor_msgs</depend>
   <depend>OpenCV</depend>
   <depend>cv_bridge</depend>
   <depend>ffmpeg_image_transport_msgs</depend>
   <depend>foxglove_msgs</depend>
-  <depend>usr_msgs</depend>
+  <depend>rosidl_typesupport_introspection_cpp</depend>
   <depend>visualization_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>

@@ -19,6 +19,7 @@ find_package(rosbag2_compression_zstd REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rmw REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(rosbag2_snapshot_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -26,7 +27,7 @@ find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(ffmpeg_image_transport_msgs REQUIRED)
 find_package(foxglove_msgs REQUIRED)
-find_package(usr_msgs REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
@@ -50,6 +51,7 @@ set(DEPENDENCIES
   rclcpp
   rclcpp_action
   rclcpp_components
+  rmw
   std_srvs
   rosbag2_snapshot_msgs
   sensor_msgs
@@ -57,7 +59,7 @@ set(DEPENDENCIES
   cv_bridge
   ffmpeg_image_transport_msgs
   foxglove_msgs
-  usr_msgs
+  rosidl_typesupport_introspection_cpp
   visualization_msgs
 )
 

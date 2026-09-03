@@ -56,8 +56,6 @@
 #include <thread>
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
-
-#include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/topic_resolver.hpp"
 
@@ -125,12 +123,19 @@ struct TopicDetails
   }
 };
 
+// Falls back to DEFAULT QoS(5) on an unrecognized string (logging an error) rather than
+// throwing: this is reached from a node constructor and from timer callbacks (capture
+// profile QoS strings), where an uncaught exception would crash the whole process instead
+// of just misconfiguring one topic.
 const rclcpp::QoS qos_string_to_qos(std::string str)
 {
     if (str == "DEFAULT") return rclcpp::QoS(5);
     if (str == "SENSOR_DATA") return rclcpp::QoS(5).best_effort();
     if (str == "TRANSIENT_LOCAL") return rclcpp::QoS(5).durability(rclcpp::DurabilityPolicy::TransientLocal);
-    throw std::runtime_error("Unknown QoS string " + str);
+    RCLCPP_ERROR(
+      rclcpp::get_logger("rosbag2_snapshot"),
+      "Unknown QoS string '%s', falling back to DEFAULT QoS(5)", str.c_str());
+    return rclcpp::QoS(5);
 }
 
 class Snapshotter;
@@ -404,39 +409,6 @@ private:
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
     std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers,
     std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr);
-};
-
-// Configuration for SnapshotterClient
-struct SnapshotterClientOptions
-{
-  SnapshotterClientOptions();
-  enum Action
-  {
-    TRIGGER_WRITE,
-    PAUSE,
-    RESUME
-  };
-  // What to do when SnapshotterClient.run is called
-  Action action_;
-  // List of topics to write when action_ == TRIGGER_WRITE.
-  // If empty, write all buffered topics.
-  std::vector<TopicDetails> topics_;
-  // Name of file to write to when action_ == TRIGGER_WRITE, relative to snapshot node.
-  // If empty, use prefix
-  std::string filename_;
-  // Prefix of the name of file written to when action_ == TRIGGER_WRITE.
-  std::string prefix_;
-};
-
-// Node used to call services which interface with the snapshotter node to trigger
-// write, pause, and resume
-class SnapshotterClient : public rclcpp::Node
-{
-public:
-  explicit SnapshotterClient(const rclcpp::NodeOptions & options);
-
-private:
-  void setSnapshotterClientOptions(SnapshotterClientOptions const & opts);
 };
 
 }  // namespace rosbag2_snapshot

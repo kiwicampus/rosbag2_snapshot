@@ -71,7 +71,6 @@ set(library_name ${executable_name}_core)
 
 add_library(${library_name} SHARED
   include/rosbag2_snapshot/snapshotter.hpp
-# src/snapshot.cpp
   src/snapshotter.cpp
   src/capture_profiles.cpp
   src/topic_resolver.cpp
@@ -111,7 +110,6 @@ ament_target_dependencies(${executable_name}
 
 # Declare rosbag2_snapshot node component
 rclcpp_components_register_nodes(${library_name} "rosbag2_snapshot::Snapshotter")
-rclcpp_components_register_nodes(${library_name} "rosbag2_snapshot::SnapshotterClient")
 
 install(TARGETS ${library_name}
   ARCHIVE DESTINATION lib

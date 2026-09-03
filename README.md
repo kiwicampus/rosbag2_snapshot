@@ -99,35 +99,25 @@ it's the rosbag2 storage compression preset (e.g. `zstd_small`), not a capture p
 
 ### Client
 
-###### Write all buffered data to `<datetime>.bag`
-`ros2 run rosbag2_snapshot snapshotter_client --ros-params -p action_type:=trigger_write`
+There is no separate client binary -- `trigger_snapshot` is a ROS 2 action (not a service),
+served directly by the `snapshotter` node under its own namespace.
 
-###### Write buffered data from selected topics to `new_lighting<datetime>.bag`
-`ros2 run rosbag2_snapshot snapshotter_client --ros-params -p filename:=new_lighting -p topics:=["/camera/image_raw", "/camera/camera_info"]`
-
-###### Write all buffered data to `/home/user/crashed_into_wall.bag`
-`ros2 run rosbag2_snapshot snapshotter_client --ros-params -p filename:="/home/user/crashed_into_wall.bag"`
-
-###### Pause buffering of new data, holding current buffer in memory until resumed or write is triggered
-`ros2 run rosbag2_snapshot snapshotter_client --ros-params -p action_type:=pause`
-
-###### Resume buffering new data
-`ros2 run rosbag2_snapshot snapshotter_client --ros-params -p action_type:=resume`
-
-###### Call trigger service manually
+###### Trigger a snapshot of all buffered topics
 
 ```
-$ ros2 service call /trigger_snapshot rosbag2_snapshot_msgs/srv/TriggerSnapshot "{filename: '', topics: [], start_time: {sec: 0, nanosec: 0}, stop_time: {sec: 0, nanosec: 0}}"
-requester: making request: rosbag2_snapshot_msgs.srv.TriggerSnapshot_Request(filename='', topics=[], start_time=builtin_interfaces.msg.Time(sec=0, nanosec=0), stop_time=builtin_interfaces.msg.Time(sec=0, nanosec=0))
-
-response:
-rosbag2_snapshot_msgs.srv.TriggerSnapshot_Response(success=True, message='')
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: ''}"
 ```
 
-###### Call pause/resume service manually
+###### Trigger a snapshot of selected topics via a named capture profile
 
 ```
-$ ros2 service call /enable_snapshot std_srvs/srv/SetBool "{data: false}"
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '', profile: 'sensors'}"
+```
+
+###### Pause/resume buffering manually (this one really is a service)
+
+```
+$ ros2 service call /enable_snapshot std_srvs/srv/SetBool "{data: false}"  # false = pause, true = resume
 requester: making request: std_srvs.srv.SetBool_Request(data=False)
 
 response:

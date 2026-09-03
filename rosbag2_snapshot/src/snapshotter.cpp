@@ -407,11 +407,6 @@ bool SnapshotterOptions::addTopic(
   return ret.second;
 }
 
-SnapshotterClientOptions::SnapshotterClientOptions()
-: action_(SnapshotterClientOptions::TRIGGER_WRITE)
-{
-}
-
 SnapshotMessage::SnapshotMessage(
   std::shared_ptr<const rclcpp::SerializedMessage> _msg, Time _time)
 : msg(_msg), time(_time)
@@ -1448,7 +1443,12 @@ void Snapshotter::createBag(
 
       if (message_queue->size_ == 0) RCLCPP_DEBUG(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
-      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time, use_profile)) {
+      // Only force this topic's throttle when the profile itself set a max_rate_hz for
+      // it (topic.throttle_period != -1.0): a profile topic with no max_rate_hz must not
+      // pick up an unrelated static throttle_period configured on the same topic name via
+      // topics_/topic_details, which force_throttle would otherwise apply unconditionally.
+      bool force_topic_throttle = use_profile && topic.throttle_period != -1.0;
+      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time, force_topic_throttle)) {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
@@ -1736,192 +1736,7 @@ void Snapshotter::resolvePendingProfileTopics()
   pending_profile_topics_ = still_pending;
 }
 
-SnapshotterClient::SnapshotterClient(const rclcpp::NodeOptions & options)
-: rclcpp::Node("snapshotter_client", options)
-{
-  std::string action_str{};
-
-  SnapshotterClientOptions opts{};
-
-  try {
-    action_str = declare_parameter<std::string>("action_type");
-  } catch (const rclcpp::ParameterTypeException & ex) {
-    RCLCPP_ERROR(get_logger(), "action_type parameter is missing or of incorrect type.");
-    throw ex;
-  }
-
-  if (action_str == "trigger_write") {
-    opts.action_ = SnapshotterClientOptions::TRIGGER_WRITE;
-  } else if (action_str == "resume") {
-    opts.action_ = SnapshotterClientOptions::RESUME;
-  } else if (action_str == "pause") {
-    opts.action_ = SnapshotterClientOptions::PAUSE;
-  } else {
-    RCLCPP_ERROR(get_logger(), "action_type must be one of: trigger_write, resume, or pause");
-    throw std::invalid_argument{"Invalid value for action_type parameter."};
-  }
-
-  std::vector<std::string> topic_names{};
-
-  try {
-    topic_names = declare_parameter<std::vector<std::string>>("topics");
-  } catch (const rclcpp::ParameterTypeException & ex) {
-    if (std::string{ex.what()}.find("not set") == std::string::npos) {
-      RCLCPP_ERROR(get_logger(), "topics must be an array of strings.");
-      throw ex;
-    }
-  }
-
-  if (topic_names.size() > 0) {
-    for (const auto & topic : topic_names) {
-      std::string prefix = "topic_details." + topic;
-      std::string topic_type{};
-
-      try {
-        topic_type = declare_parameter<std::string>(prefix + ".type");
-      } catch (const rclcpp::ParameterTypeException & ex) {
-        if (std::string{ex.what()}.find("not set") == std::string::npos) {
-          RCLCPP_ERROR(get_logger(), "Topic type must be a string.");
-        } else {
-          RCLCPP_ERROR(get_logger(), "Topic %s is missing a type.", topic.c_str());
-        }
-
-        throw ex;
-      }
-
-      TopicDetails details{};
-      details.name = topic;
-      details.type = topic_type;
-      opts.topics_.push_back(details);
-    }
-  }
-
-  try {
-    opts.filename_ = declare_parameter<std::string>("filename");
-  } catch (const rclcpp::ParameterTypeException & ex) {
-    if (opts.action_ == SnapshotterClientOptions::TRIGGER_WRITE &&
-      std::string{ex.what()}.find("not set") == std::string::npos)
-    {
-      RCLCPP_ERROR(get_logger(), "filename must be a string.");
-      throw ex;
-    }
-  }
-
-  try {
-    opts.prefix_ = declare_parameter<std::string>("prefix");
-  } catch (const rclcpp::ParameterTypeException & ex) {
-    if (opts.action_ == SnapshotterClientOptions::TRIGGER_WRITE &&
-      std::string{ex.what()}.find("not set") == std::string::npos)
-    {
-      RCLCPP_ERROR(get_logger(), "prefix must be a string.");
-      throw ex;
-    }
-  }
-
-  if (opts.action_ == SnapshotterClientOptions::TRIGGER_WRITE && opts.topics_.size() == 0) {
-    RCLCPP_INFO(get_logger(), "No topics provided - logging all topics.");
-    RCLCPP_WARN(get_logger(), "Logging all topics is very memory-intensive.");
-  }
-
-  setSnapshotterClientOptions(opts);
-}
-
-void SnapshotterClient::setSnapshotterClientOptions(const SnapshotterClientOptions & opts)
-{
-  if (opts.action_ == SnapshotterClientOptions::TRIGGER_WRITE) {
-    auto client = create_client<TriggerSnapshot>("trigger_snapshot");
-    if (!client->service_is_ready()) {
-      throw std::runtime_error{
-              "Service trigger_snapshot is not ready. "
-              "Is snapshot running in this namespace?"
-      };
-    }
-
-    TriggerSnapshot::Request::SharedPtr req;
-
-    for (const auto & topic : opts.topics_) {
-      req->topics.push_back(topic.asMessage());
-    }
-
-    // Prefix mode
-    if (opts.filename_.empty()) {
-      req->filename = opts.prefix_;
-      size_t ind = req->filename.rfind(".bag");
-      if (ind != string::npos && ind == req->filename.size() - 4) {
-        req->filename.erase(ind);
-      }
-    } else {
-      req->filename = opts.filename_;
-      size_t ind = req->filename.rfind(".bag");
-      if (ind == string::npos || ind != req->filename.size() - 4) {
-        req->filename += ".bag";
-      }
-    }
-
-    // Resolve filename relative to clients working directory to avoid confusion
-    // Special case of no specified file, ensure still in working directory of client
-    if (req->filename.empty()) {
-      req->filename = "./";
-    }
-    std::filesystem::path p(std::filesystem::absolute(req->filename));
-    req->filename = p.string();
-
-    auto result_future = client->async_send_request(req);
-    auto future_result =
-      rclcpp::spin_until_future_complete(this->get_node_base_interface(), result_future);
-
-    if (future_result == rclcpp::FutureReturnCode::SUCCESS) {
-      RCLCPP_ERROR(get_logger(), "Calling the service failed.");
-    } else {
-      auto result = result_future.get();
-      RCLCPP_INFO(
-        get_logger(),
-        "Service returned: [%s] %s",
-        (result->success ? "SUCCESS" : "FAILURE"),
-        result->message.c_str()
-      );
-    }
-
-    return;
-  } else if (  // NOLINT
-    opts.action_ == SnapshotterClientOptions::PAUSE ||
-    opts.action_ == SnapshotterClientOptions::RESUME)
-  {
-    auto client = create_client<SetBool>("enable_snapshot");
-    if (!client->service_is_ready()) {
-      throw std::runtime_error{
-              "Service enable_snapshot does not exist. "
-              "Is snapshot running in this namespace?"
-      };
-    }
-
-    SetBool::Request::SharedPtr req;
-    req->data = (opts.action_ == SnapshotterClientOptions::RESUME);
-
-    auto result_future = client->async_send_request(req);
-    auto future_result =
-      rclcpp::spin_until_future_complete(this->get_node_base_interface(), result_future);
-
-    if (future_result == rclcpp::FutureReturnCode::SUCCESS) {
-      RCLCPP_ERROR(get_logger(), "Calling the service failed.");
-    } else {
-      auto result = result_future.get();
-      RCLCPP_INFO(
-        get_logger(),
-        "Service returned: [%s] %s",
-        (result->success ? "SUCCESS" : "FAILURE"),
-        result->message.c_str()
-      );
-    }
-
-    return;
-  } else {
-    throw std::runtime_error{"Invalid options received."};
-  }
-}
-
 }  // namespace rosbag2_snapshot
 
 #include <rclcpp_components/register_node_macro.hpp>  // NOLINT
 RCLCPP_COMPONENTS_REGISTER_NODE(rosbag2_snapshot::Snapshotter)
-RCLCPP_COMPONENTS_REGISTER_NODE(rosbag2_snapshot::SnapshotterClient)

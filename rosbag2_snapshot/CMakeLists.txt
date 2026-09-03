@@ -25,7 +25,6 @@ find_package(rosbag2_snapshot_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(ffmpeg_image_transport_msgs REQUIRED)
 find_package(foxglove_msgs REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -59,7 +58,6 @@ set(DEPENDENCIES
   sensor_msgs
   OpenCV
   cv_bridge
-  ffmpeg_image_transport_msgs
   foxglove_msgs
   rosidl_typesupport_introspection_cpp
   visualization_msgs

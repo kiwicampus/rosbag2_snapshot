@@ -17,10 +17,6 @@
 #include "rosbag2_snapshot/ffmpeg_encoding/safe_param.hpp"
 #include "rosbag2_snapshot/ffmpeg_encoding/utils.hpp"
 
-#include <cv_bridge/cv_bridge.hpp>
-
-#include <fstream>
-#include <iomanip>
 #include <string>
 
 namespace ffmpeg_image_transport
@@ -289,23 +285,6 @@ void FFMPEGEncoder::setAVOption(const std::string & field, const std::string & v
       RCLCPP_ERROR_STREAM(
         logger_, "cannot set option " << field << " to value " << value << ": " << utils::err(err));
     }
-  }
-}
-
-void FFMPEGEncoder::encodeImage(const Image & msg)
-{
-  rclcpp::Time t0;
-  if (measurePerformance_) {
-    t0 = rclcpp::Clock().now();
-  }
-  // TODO(Bernd): forcing the encoding to be BGR8 is wasteful when
-  // the encoder supports monochrome.
-
-  cv::Mat img = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8)->image;
-  encodeImage(img, msg.header, t0);
-  if (measurePerformance_) {
-    const auto t1 = rclcpp::Clock().now();
-    tdiffDebayer_.update((t1 - t0).seconds());
   }
 }
 

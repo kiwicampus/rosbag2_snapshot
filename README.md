@@ -13,6 +13,7 @@ It subscribes to topics and maintains a buffer of recent messages like a dash ca
 
 ```
 $ ros2 run rosbag2_snapshot snapshotter
+```
 
 Buffer recent messages until triggered to write or trigger an already running instance.
 
@@ -88,6 +89,11 @@ Every topic named by any profile file is buffered continuously from startup, sam
 `topics` list -- there is no "subscribe only while this profile is active" mode. A late
 subscription would miss everything published before it connects for any VOLATILE topic
 (the default for most sensor topics), defeating the point of buffering ahead of a trigger.
+
+If two separate (non-including) profile files both name the same topic, the one whose
+profile name sorts first alphabetically wins that topic's type/qos/max_rate_hz for the
+shared subscription -- profiles are otherwise independent, so there's no explicit priority
+list to consult.
 
 Select a profile in a `TriggerSnapshot` request via the new `profile` field (`""` = today's
 behavior: `topics` on the request, or the full buffer, exactly as before). A named profile's

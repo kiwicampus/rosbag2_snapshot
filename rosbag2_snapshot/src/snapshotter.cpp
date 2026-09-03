@@ -526,14 +526,7 @@ bool MessageQueue::refreshBuffer(rclcpp::Time const& time)
 }
 void MessageQueue::push(SnapshotMessage const& _out)
 {
-  std::unique_lock<std::mutex> l(lock);
-  if (!l.owns_lock()) {
-    static rclcpp::Clock clock;
-    RCLCPP_WARN_THROTTLE(logger_, clock, 1000, 
-                         "Failed to acquire lock for topic %s, dropping message", 
-                         sub_ ? sub_->get_topic_name() : "unknown");
-    return;
-  }
+  std::lock_guard<std::mutex> l(lock);
   _push(_out);
 }
 
@@ -1199,7 +1192,7 @@ bool Snapshotter::writeTopic(
     {
       // Put old messages at the beginning of the bag
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
-      bag_message->time_stamp = req->start_time.sec*1e9 + req->start_time.nanosec;
+      bag_message->time_stamp = rclcpp::Time(req->start_time).nanoseconds();
     }
     else
     {

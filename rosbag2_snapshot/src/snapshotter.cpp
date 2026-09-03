@@ -27,7 +27,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 #include <builtin_interfaces/msg/time.hpp>
-#include <rcpputils/scope_exit.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rmw/rmw.h>
 #include <rosbag2_cpp/typesupport_helpers.hpp>
@@ -37,17 +36,20 @@
 
 #include <filesystem>
 
+#include <algorithm>
 #include <climits>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
+#include <future>
 #include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -632,9 +634,18 @@ const int Snapshotter::QUEUE_SIZE = 10;
 Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 : rclcpp::Node("snapshotter", options),
   recording_(true),
-  writing_(false),
   topic_resolver_(this)
 {
+  // Created first (before subscribeProfileTopics(), which can itself
+  // trigger a publishState() call via subscribeResolvedTopic()) so state_pub_
+  // is never null when publishState() runs. state_pub_ is transient_local so
+  // a late subscriber gets current state immediately without waiting for the
+  // next change.
+  state_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotState>(
+    "snapshot_state", rclcpp::QoS(1).transient_local());
+  capture_event_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>(
+    "snapshot_capture_event", rclcpp::QoS(10));
+
   parseOptionsFromParams();
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
@@ -685,10 +696,19 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
       std::chrono::duration(1s),
       std::bind(&Snapshotter::pollAndResolveTopics, this));
   }
+
+  publishState();
 }
 
 Snapshotter::~Snapshotter()
 {
+  // No explicit join here: capture_futures_ is the last-declared member of
+  // Snapshotter, so it is the first thing torn down once this destructor
+  // body returns, and every std::future in it (from std::async(launch::async,
+  // ...)) blocks in its own destructor until that capture finishes. That
+  // guarantees no capture thread is still running by the time state_lock_,
+  // buffers_ or the publishers above get destroyed, fixing the old
+  // detached-thread use-after-free on shutdown.
   for (auto & buffer : buffers_) {
     buffer.second->sub_.reset();
   }
@@ -1275,6 +1295,28 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
+  // Reject only a second goal for the exact same filename -- two captures
+  // opening the same staging path concurrently would corrupt each other's
+  // output. This is deliberately narrow: it does not limit concurrency
+  // across distinct filenames at all, since concurrent captures for
+  // different events are a real, relied-upon usage pattern (data_server_cpp
+  // tracks multiple simultaneous goals itself via its own active_goals_ map).
+  {
+    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+    if (active_filenames_.count(goal->filename)) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Rejecting request to snapshot: '%s' is already being written by "
+        "another in-flight capture.", goal->filename.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    active_filenames_.insert(goal->filename);
+    ++active_capture_count_;
+  }
+  // Called after the lock above is released -- state_lock_ is a
+  // std::shared_mutex, not reentrant; publishState() takes its own lock.
+  publishState();
+
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -1291,30 +1333,63 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   auto req = goal_handle->get_goal();
   auto res = std::make_shared<TriggerSnapAction::Result>();
 
+  // Reap any capture futures that have already finished. Just bookkeeping
+  // so this vector doesn't grow unbounded -- the corresponding captures have
+  // already run to completion; this call never blocks.
+  capture_futures_.erase(
+    std::remove_if(
+      capture_futures_.begin(), capture_futures_.end(),
+      [](std::future<void> & f) {
+        return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+      }),
+    capture_futures_.end());
+
+  std::filesystem::path final_path(req->filename);
+  std::filesystem::path staging_path = stagingPathFor(final_path);
+
+  if (std::filesystem::exists(staging_path)) {
+    // There's no "storage root" concept in this package, so there's no
+    // well-defined, bounded set of directories to sweep for orphaned
+    // staging files at startup. This lazily reclaims one left behind by a
+    // previous crash/kill -9 the moment that exact final_path is requested
+    // again.
+    RCLCPP_WARN(
+      get_logger(),
+      "Staging file %s already exists (likely left behind by a previous "
+      "crash or incomplete capture); it will be overwritten.",
+      staging_path.string().c_str());
+  }
+
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
-  
-  RCLCPP_INFO(get_logger(), "opening %s", req->filename.c_str());
+  RCLCPP_INFO(
+    get_logger(), "opening %s (staging at %s)",
+    req->filename.c_str(), staging_path.string().c_str());
 
   try {
     rosbag2_storage::StorageOptions storage_opts;
     storage_opts.storage_id = "mcap";
-    storage_opts.uri = req->filename;
+    storage_opts.uri = staging_path.string();
     storage_opts.storage_preset_profile = req->rosbag_preset_profile != "" ? req->rosbag_preset_profile : options_.rosbag_preset_profile_;
     rosbag2_cpp::ConverterOptions converter_opts{};
     bag_writer_ptr->open(storage_opts, converter_opts);
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
-          get_logger(), "Failed to open %s file, reason: %s", req->filename.c_str(), ex.what());
+          get_logger(), "Failed to open %s file, reason: %s", staging_path.string().c_str(), ex.what());
     res->success = false;
     res->message = "Unable to open file for writing, " + std::string(ex.what());
+    {
+      std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+      --active_capture_count_;
+      active_filenames_.erase(req->filename);
+      has_last_capture_ = true;
+      last_capture_success_ = false;
+      last_capture_message_ = res->message;
+      last_capture_stamp_ = this->now();
+    }
+    publishState();
     return goal_handle->abort(res);
-  }
-
-  {
-    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    writing_ = true;
   }
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
@@ -1325,41 +1400,30 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     }
   }
 
-  // Use RAII to ensure cloned buffers are cleaned up properly  
-  auto cleanup_buffers = rcpputils::make_scope_exit([&cloned_buffers, this]() {
-    // Calculate total memory before cleanup for logging  
-    size_t total_memory_freed = 0;
-    for (const auto& buffer_pair : cloned_buffers) {
-      if (buffer_pair.second) {
-        total_memory_freed += buffer_pair.second->size_;
-      }
-    }
-    RCLCPP_INFO(get_logger(), "Cleaned up rosbag cloned buffers, freed ~%.1f MB", 
-                total_memory_freed / 1e6);
-    // Let destructors handle cleanup automatically - don't manually clear/reset
-  });
+  PendingCapture capture;
+  capture.goal_handle = goal_handle;
+  capture.cloned_buffers = std::move(cloned_buffers);
+  capture.bag_writer_ptr = bag_writer_ptr;
+  capture.staging_path = staging_path;
+  capture.final_path = final_path;
+  capture.profile = req->profile;
 
-  // Detach thread to prevent blocking the main thread
-  std::thread{std::bind(&Snapshotter::createBag, this, _1, _2, _3), goal_handle, cloned_buffers, bag_writer_ptr}.detach();
+  // std::async(launch::async, ...) instead of a detached thread: the
+  // returned future is kept in capture_futures_ so ~Snapshotter() can wait
+  // for it (see the comment on capture_futures_ in snapshotter.hpp).
+  capture_futures_.push_back(
+    std::async(std::launch::async, &Snapshotter::createBag, this, std::move(capture)));
 }
 
-void Snapshotter::createBag(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-  std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers,
-  std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr)
+void Snapshotter::createBag(PendingCapture capture)
 {
+  auto goal_handle = capture.goal_handle;
+  auto & cloned_buffers = capture.cloned_buffers;
+  auto & bag_writer_ptr = capture.bag_writer_ptr;
+
   auto result = std::make_shared<TriggerSnapAction::Result>();
   auto feedback = std::make_shared<TriggerSnapAction::Feedback>();
   auto req = goal_handle->get_goal();
-
-  // Clear writing_ on every exit path of this function (including
-  // cancellation), so enable_snapshot's "cannot enable while writing"
-  // guard doesn't stay stuck forever.
-  auto reset_writing = rcpputils::make_scope_exit(
-    [this]() {
-      std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-      writing_ = false;
-    });
 
   rclcpp::Time request_time = this->now();
   bool success = true;
@@ -1391,8 +1455,9 @@ void Snapshotter::createBag(
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : topics_to_write) {
       if (goal_handle->is_canceling()) {
-        result->success = false;
-        result->message = "Rosbag creation canceled";
+        finalizeCapture(
+          capture, false, "Rosbag creation canceled", result,
+          static_cast<size_t>(count_topics), request_time);
         goal_handle->canceled(result);
         return;
       }
@@ -1432,8 +1497,9 @@ void Snapshotter::createBag(
   } else {  // If topic list empty, record all buffered topics
     for (const auto & pair : cloned_buffers) {
       if (goal_handle->is_canceling()) {
-        result->success = false;
-        result->message = "Rosbag creation canceled";
+        finalizeCapture(
+          capture, false, "Rosbag creation canceled", result,
+          static_cast<size_t>(count_topics), request_time);
         goal_handle->canceled(result);
         return;
       }
@@ -1452,12 +1518,88 @@ void Snapshotter::createBag(
     }
   }
   
-  bag_writer_ptr->close();
-  RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
+  finalizeCapture(capture, success, message, result, static_cast<size_t>(count_topics), request_time);
+  // Preserves this function's pre-existing convention of calling succeed()
+  // even when result->success is false (action status "succeeded" while the
+  // semantic result reports failure) -- not changed as a drive-by fix here.
+  goal_handle->succeed(result);
+}
+
+void Snapshotter::finalizeCapture(
+  PendingCapture & capture, bool success, std::string message,
+  const std::shared_ptr<TriggerSnapAction::Result> & result,
+  size_t topics_written, const rclcpp::Time & request_time)
+{
+  // Always attempt to close, even on a failed/canceled capture, so the
+  // staging file left on disk is a well-formed, readable bag rather than
+  // whatever state the Writer's destructor happens to leave it in.
+  try {
+    capture.bag_writer_ptr->close();
+    RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
+  } catch (const std::exception & ex) {
+    success = false;
+    message = "Failed to close bag file: " + std::string(ex.what());
+    RCLCPP_WARN(get_logger(), "%s", message.c_str());
+  }
+
+  if (success) {
+    std::error_code ec;
+    std::filesystem::rename(capture.staging_path, capture.final_path, ec);
+    if (ec) {
+      success = false;
+      message = "Failed to move staged bag " + capture.staging_path.string() +
+        " to " + capture.final_path.string() + ": " + ec.message();
+      RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+    } else {
+      message = capture.final_path.string();
+    }
+  } else {
+    RCLCPP_WARN(
+      get_logger(), "Capture did not succeed; leaving partial bag at staging path %s",
+      capture.staging_path.string().c_str());
+  }
 
   result->success = success;
   result->message = message;
-  goal_handle->succeed(result);
+
+  rclcpp::Time stamp = this->now();
+  {
+    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+    --active_capture_count_;
+    active_filenames_.erase(capture.final_path.string());
+    has_last_capture_ = true;
+    last_capture_success_ = success;
+    last_capture_message_ = message;
+    last_capture_stamp_ = stamp;
+  }
+
+  auto event = std::make_shared<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>();
+  event->filename = capture.final_path.string();
+  event->profile = capture.profile;
+  event->success = success;
+  event->message = message;
+  event->topics_written = static_cast<uint32_t>(topics_written);
+  event->duration = static_cast<float>((stamp - request_time).seconds());
+  event->stamp = stamp;
+  capture_event_pub_->publish(*event);
+
+  publishState();
+}
+
+void Snapshotter::publishState()
+{
+  auto msg = std::make_shared<rosbag2_snapshot_msgs::msg::SnapshotState>();
+  {
+    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    msg->recording = recording_;
+    msg->active_capture_count = active_capture_count_;
+    msg->has_last_capture = has_last_capture_;
+    msg->last_capture_success = last_capture_success_;
+    msg->last_capture_message = last_capture_message_;
+    msg->last_capture_stamp = last_capture_stamp_;
+  }
+  msg->buffered_topic_count = static_cast<uint32_t>(buffers_.size());
+  state_pub_->publish(*msg);
 }
 
 void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& details)
@@ -1530,8 +1672,12 @@ void Snapshotter::enableCb(
 
   {
     std::shared_lock<std::shared_mutex> read_lock(state_lock_);
-    // Cannot enable while writing
-    if (req->data && writing_) {
+    // Cannot enable while any capture is in flight. active_capture_count_
+    // covers the whole reserved-through-finalized window (see its
+    // doc-comment in snapshotter.hpp), so this check is unchanged in intent
+    // from the old writing_ bool, just backed by a real count under
+    // concurrency instead of a single racy flag.
+    if (req->data && active_capture_count_ > 0) {
       res->success = false;
       res->message = "cannot enable recording while writing.";
       return;
@@ -1539,12 +1685,18 @@ void Snapshotter::enableCb(
   }
 
   // Obtain write lock and update state if requested state is different from current
+  bool changed = false;
   if (req->data && !recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     resume();
+    changed = true;
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     pause();
+    changed = true;
+  }
+  if (changed) {
+    publishState();
   }
 
   res->success = true;
@@ -1639,6 +1791,12 @@ bool Snapshotter::subscribeResolvedTopic(
   buffers_.emplace(details, queue);
   subscribe(details, queue);
   RCLCPP_INFO(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
+  if (state_pub_) {
+    // Defensive: publishers are created before subscribeProfileTopics() runs
+    // in the constructor, but guard anyway since this method can also be
+    // reached from that same constructor call chain.
+    publishState();
+  }
   return true;
 }
 

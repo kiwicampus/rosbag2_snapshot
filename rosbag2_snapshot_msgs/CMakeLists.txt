@@ -20,6 +20,8 @@ ament_auto_find_build_dependencies()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TopicDetails.msg"
+  "msg/SnapshotState.msg"
+  "msg/SnapshotCaptureEvent.msg"
   "action/TriggerSnapshot.action"
   DEPENDENCIES builtin_interfaces
   ADD_LINTER_TESTS

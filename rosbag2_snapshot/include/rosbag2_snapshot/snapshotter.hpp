@@ -33,6 +33,8 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/time.hpp>
 #include <rosbag2_snapshot_msgs/msg/topic_details.hpp>
+#include <rosbag2_snapshot_msgs/msg/snapshot_state.hpp>
+#include <rosbag2_snapshot_msgs/msg/snapshot_capture_event.hpp>
 #include <rosbag2_snapshot_msgs/action/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>
@@ -46,8 +48,11 @@
 #include <opencv2/imgcodecs.hpp>
 #include <chrono>
 #include <deque>
+#include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -56,6 +61,7 @@
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
+#include "rosbag2_snapshot/staging_path.hpp"
 #include "rosbag2_snapshot/topic_resolver.hpp"
 
 namespace rosbag2_snapshot
@@ -298,16 +304,40 @@ private:
   SnapshotterOptions options_;
   typedef std::map<TopicDetails, std::shared_ptr<MessageQueue>> buffers_t;
   buffers_t buffers_;
-  // Locks recording_ and writing_ states.
+  // Locks recording_, active_capture_count_, active_filenames_ and
+  // last_capture_* below.
   std::shared_mutex state_lock_;
   // True if new messages are being written to the internal buffer
   bool recording_;
-  // True if currently writing buffers to a bag file
-  bool writing_;
+  // Number of captures currently in flight, from the moment a goal is
+  // accepted (handle_goal) until it's fully finalized (finalizeCapture) --
+  // i.e. covers bag-open, buffer clone, write, close and rename, not just
+  // "bytes being written right now". Replaces the old single bool writing_:
+  // concurrent captures for different filenames are a real, relied-upon
+  // usage pattern (data_server_cpp tracks multiple simultaneous
+  // TriggerSnapshot goals itself), so this is a count, not a single-slot
+  // gate.
+  uint32_t active_capture_count_ = 0;
+  // Filenames currently being written. The only concurrency-related
+  // admission check this class makes: a second goal for a filename already
+  // in this set is rejected in handle_goal, since two captures opening the
+  // same staging path concurrently would corrupt each other's output. Goals
+  // for distinct filenames are never limited by this.
+  std::set<std::string> active_filenames_;
+  // Outcome of the most recently *finished* capture (of any filename) --
+  // a non-authoritative rollup for status reporting; the authoritative
+  // per-capture record is the SnapshotCaptureEvent published by
+  // finalizeCapture().
+  bool has_last_capture_ = false;
+  bool last_capture_success_ = false;
+  std::string last_capture_message_;
+  builtin_interfaces::msg::Time last_capture_stamp_;
   rclcpp_action::Server<TriggerSnapAction>::SharedPtr
     trigger_snapshot_action_server_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_server_;
   rclcpp::TimerBase::SharedPtr poll_topic_timer_;
+  rclcpp::Publisher<rosbag2_snapshot_msgs::msg::SnapshotState>::SharedPtr state_pub_;
+  rclcpp::Publisher<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>::SharedPtr capture_event_pub_;
 
   // Capture profiles loaded from options_.capture_profiles_dir_ at startup.
   // Populated once in the constructor and read-only afterward, so reading it
@@ -403,11 +433,55 @@ private:
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
+
+  // Bundles everything a capture's worker task needs. Replaces the old
+  // 3-argument std::bind call (goal_handle, cloned_buffers, bag_writer_ptr)
+  // so the staging/final path pair (and profile, for the event message) can
+  // be threaded through without an ever-growing argument list.
+  struct PendingCapture
+  {
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle;
+    std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
+    std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
+    // Same directory as final_path (guarantees an atomic same-filesystem
+    // rename), e.g. "<final_path>.tmp".
+    std::filesystem::path staging_path;
+    // req->filename, verbatim -- never opened for writing directly.
+    std::filesystem::path final_path;
+    // req->profile, copied for use off the executor thread (event message).
+    std::string profile;
+  };
+
   // Iter through the message queue and write the messages to the bag
-  void createBag(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-    std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers,
-    std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr);
+  void createBag(PendingCapture capture);
+
+  // Closes the bag writer (best-effort, even on failure/cancel so the
+  // staging file is left well-formed), and -- only if still successful --
+  // atomically renames staging_path to final_path. Updates
+  // result->success/message, active_capture_count_/active_filenames_/
+  // last_capture_* state, and publishes the capture-completed event plus a
+  // refreshed state.
+  void finalizeCapture(
+    PendingCapture & capture, bool success, std::string message,
+    const std::shared_ptr<TriggerSnapAction::Result> & result,
+    size_t topics_written, const rclcpp::Time & request_time);
+
+  // Publishes the current recording/active-capture-count/buffered-topic
+  // state plus the most recent capture outcome. Safe to call from either
+  // the executor thread or a capture's worker task.
+  void publishState();
+
+  // Not protected by state_lock_: touched only from the executor thread
+  // (handle_accepted, and implicitly by its own destructor), never from a
+  // capture's worker task. Must be the LAST member declared in this class:
+  // members are destroyed in reverse declaration order, so declaring this
+  // last makes it the FIRST thing torn down in ~Snapshotter(), before
+  // state_lock_/buffers_/the publishers above. Each entry comes from
+  // std::async(std::launch::async, ...), whose returned std::future blocks
+  // in its destructor until that task finishes -- so simply letting this
+  // vector be destroyed joins every outstanding capture, fixing the old
+  // detached-thread use-after-free on shutdown with no explicit join code.
+  std::vector<std::future<void>> capture_futures_;
 };
 
 }  // namespace rosbag2_snapshot

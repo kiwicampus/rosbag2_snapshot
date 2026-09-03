@@ -103,6 +103,38 @@ An unknown profile name is rejected at goal-acceptance time.
 Note: `rosbag_preset_profile` (above) is an unrelated, differently-named existing setting --
 it's the rosbag2 storage compression preset (e.g. `zstd_small`), not a capture profile.
 
+### Concurrent captures & atomic writes
+
+Multiple `TriggerSnapshot` goals for *different* filenames may be in flight at the same time --
+this is a real, relied-upon usage pattern (e.g. `data_server_cpp` can schedule more than one
+capture at once) and is not limited. The only rejection this package makes on that basis is a
+second goal for a filename that's *already* being written, since two captures opening the same
+output file concurrently would corrupt each other's output; it's rejected at goal-acceptance
+time with a clear message, and freed up again as soon as the first capture finishes.
+
+Every capture is written to a staging path in the same directory as the requested filename
+(`<filename>.tmp`) and atomically renamed into place only once the write succeeds -- a crash or
+`kill -9` mid-write leaves only the `.tmp` file behind, never a corrupt file at the real path. A
+leftover `.tmp` from a previous crash is reclaimed the next time that exact filename is
+requested again (there's no startup sweep, since this package has no "storage root" concept to
+bound one to).
+
+### Status & capture-event topics
+
+Two additional topics report on the node's own state, independent of the per-request
+action feedback/result:
+
+- **`snapshot_state`** (`rosbag2_snapshot_msgs/msg/SnapshotState`, transient-local, so a late
+  subscriber gets the current value immediately): `recording`, `active_capture_count`,
+  `buffered_topic_count`, and the outcome of the most recently *finished* capture of any
+  filename (`has_last_capture`, `last_capture_success`, `last_capture_message`,
+  `last_capture_stamp`). Published on every state change (goal accepted/rejected, capture
+  finalized, recording paused/resumed, a profile topic newly buffered).
+- **`snapshot_capture_event`** (`rosbag2_snapshot_msgs/msg/SnapshotCaptureEvent`): one message
+  per completed capture -- `filename`, `profile`, `success`, `message`, `topics_written`,
+  `duration`, `stamp` -- so a consumer that needs to know about a *specific* capture (rather
+  than the node's rolled-up last-capture summary above) doesn't have to race the state topic.
+
 ### Client
 
 There is no separate client binary -- `trigger_snapshot` is a ROS 2 action (not a service),

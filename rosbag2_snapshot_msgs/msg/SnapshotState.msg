@@ -1,0 +1,7 @@
+bool recording
+uint32 active_capture_count
+uint32 buffered_topic_count
+bool has_last_capture
+bool last_capture_success
+string last_capture_message
+builtin_interfaces/Time last_capture_stamp

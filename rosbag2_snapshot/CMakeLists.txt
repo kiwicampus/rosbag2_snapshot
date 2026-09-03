@@ -133,6 +133,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_capture_profiles PRIVATE include)
   target_link_libraries(test_capture_profiles yaml-cpp)
+
+  # Pure/ROS-free, exercises only stagingPathFor() from snapshotter.hpp.
+  ament_add_gtest(test_staging_path
+    test/test_staging_path.cpp
+  )
+  target_include_directories(test_staging_path PRIVATE include)
 endif()
 
 ament_package()

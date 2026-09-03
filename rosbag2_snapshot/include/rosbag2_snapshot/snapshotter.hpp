@@ -33,7 +33,6 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/time.hpp>
 #include <rosbag2_snapshot_msgs/msg/topic_details.hpp>
-#include <rosbag2_snapshot_msgs/srv/trigger_snapshot.hpp>
 #include <rosbag2_snapshot_msgs/action/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <rosbag2_cpp/writer.hpp>

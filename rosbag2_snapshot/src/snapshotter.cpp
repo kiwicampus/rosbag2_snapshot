@@ -54,7 +54,6 @@
 #include <utility>
 #include <vector>
 #include <thread>
-#include <fstream>
 
 namespace rosbag2_snapshot
 {
@@ -62,7 +61,6 @@ namespace rosbag2_snapshot
 using namespace std::chrono_literals;  // NOLINT
 
 using rclcpp::Time;
-using rosbag2_snapshot_msgs::srv::TriggerSnapshot;
 using std::placeholders::_1;
 using std::placeholders::_2;
 using std::placeholders::_3;
@@ -427,32 +425,8 @@ std::shared_ptr<MessageQueue> MessageQueue::clone()
 {
   std::lock_guard<std::mutex> l(lock);
   auto cloned = std::make_shared<MessageQueue>(this->options_, this->logger_);
-  
-  // Validate current state before cloning to prevent corruption
-  if (size_ < 0) {
-    RCLCPP_ERROR(logger_, "Invalid negative size detected during clone, resetting");
-    size_ = 0;
-    return std::make_shared<MessageQueue>(this->options_, this->logger_);
-  }
-  
-  // Safely copy the queue with validation
-  try {
-    cloned->queue_ = this->queue_; // Copy the queue
-    cloned->size_ = this->size_;   // Copy the size
-    
-    // Validate cloned state
-    if (cloned->size_ != this->size_ || cloned->queue_.size() != this->queue_.size()) {
-      RCLCPP_ERROR(logger_, "Clone validation failed, creating empty clone. Original: size=%ld, queue=%zu, Cloned: size=%ld, queue=%zu", 
-                   this->size_, this->queue_.size(), cloned->size_, cloned->queue_.size());
-      cloned->queue_.clear();
-      cloned->size_ = 0;
-    }
-  } catch (const std::exception& e) {
-    RCLCPP_ERROR(logger_, "Exception during cloning: %s, creating empty clone", e.what());
-    cloned->queue_.clear();
-    cloned->size_ = 0;
-  }
-  
+  cloned->queue_ = this->queue_;
+  cloned->size_ = this->size_;
   return cloned;
 }
 
@@ -514,22 +488,6 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT) {
     while (queue_.size() != 0 && size_ + size > options_.memory_limit_) {
       _pop();
-    }
-  }
-
-  // Periodic aggressive cleanup when memory usage is high (>90% of limit)
-  if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT && 
-      size_ > (options_.memory_limit_ * 0.90)) {
-    size_t removed = 0;
-    // Aggressively clean down to 50% to prevent memory pressure crashes
-    while (!queue_.empty() && size_ > (options_.memory_limit_ * 0.5)) {
-      _pop();
-      removed++;
-    }
-    if (removed > 0) {
-      static rclcpp::Clock clock;
-      RCLCPP_DEBUG_THROTTLE(logger_, clock, 10000,
-                          "Aggressive cleanup: removed %zu messages to reduce memory pressure", removed);
     }
   }
 
@@ -1121,6 +1079,12 @@ void Snapshotter::topicCb(
   std::shared_ptr<const rclcpp::SerializedMessage> msg,
   std::shared_ptr<MessageQueue> queue)
 {
+  {
+    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    if (!recording_) {
+      return;
+    }
+  }
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   queue->push(out);
@@ -1355,6 +1319,11 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     return goal_handle->abort(res);
   }
 
+  {
+    std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+    writing_ = true;
+  }
+
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   {
     std::shared_lock<std::shared_mutex> read_lock(state_lock_);
@@ -1389,6 +1358,15 @@ void Snapshotter::createBag(
   auto result = std::make_shared<TriggerSnapAction::Result>();
   auto feedback = std::make_shared<TriggerSnapAction::Feedback>();
   auto req = goal_handle->get_goal();
+
+  // Clear writing_ on every exit path of this function (including
+  // cancellation), so enable_snapshot's "cannot enable while writing"
+  // guard doesn't stay stuck forever.
+  auto reset_writing = rcpputils::make_scope_exit(
+    [this]() {
+      std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+      writing_ = false;
+    });
 
   rclcpp::Time request_time = this->now();
   bool success = true;
@@ -1481,24 +1459,8 @@ void Snapshotter::createBag(
     }
   }
   
-  // Create a file lock before closing
-  std::string lock_file_path = req->filename + ".lock";
-  std::ofstream lock_file(lock_file_path, std::ios::out | std::ios::trunc);
-  if (lock_file.is_open()) {
-    lock_file << std::this_thread::get_id() << std::endl;
-    lock_file.close();
-    
-    // Close the bag writer
-    bag_writer_ptr->close();
-    RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
-    
-    // Remove the lock file
-    std::filesystem::remove(lock_file_path);
-  } else {
-    RCLCPP_WARN(get_logger(), "Failed to create lock file, but proceeding with close");
-    bag_writer_ptr->close();
-    RCLCPP_INFO(get_logger(), "Bag writer closed successfully");
-  }
+  bag_writer_ptr->close();
+  RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
 
   result->success = success;
   result->message = message;
@@ -1589,7 +1551,7 @@ void Snapshotter::enableCb(
     resume();
   } else if (!req->data && recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    // pause();
+    pause();
   }
 
   res->success = true;

@@ -7,7 +7,7 @@ It subscribes to topics and maintains a buffer of recent messages like a dash ca
 
 ## Usage
 
-`rosbag2_snapshot` can be configured through ROS params for more granular control. The `snapshotter` command will run the buffer server and the `snapshotter_client` command can be used as a client to request that the server write data to disk or freeze the buffer to preserve interesting data until a user can decide what to write.
+`rosbag2_snapshot` can be configured through ROS params for more granular control. The `snapshotter` command runs the buffer server; requests to write data to disk or to pause/resume buffering are made via the `trigger_snapshot` action and `enable_snapshot` service it exposes (see "Client" below) rather than a separate client binary.
 
 ### Server
 

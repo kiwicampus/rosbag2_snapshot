@@ -39,7 +39,63 @@ Buffer recent messages until triggered to write or trigger an already running in
         type: "sensor_msgs/msg/Image"
         duration: 2.0                      # [Optional] Override both limits
         memory: -1                         # Negative value means no limit
+    capture_profiles_dir: "/path/to/profiles"  # [Optional] See "Capture profiles" below
 ```
+
+### Capture profiles
+
+`capture_profiles_dir` points at a directory of `<name>.yaml` files, each one a named,
+selectable topic set. This is independent of, and can be used alongside, the `topics`/
+`topic_details` list above — a deployment can use either, both, or neither. It doesn't
+replace `topics`/`topic_details`, and using it requires no change to that list.
+
+```yaml
+# capture_profiles/sensors.yaml
+topics:
+  - name: /imu
+    max_rate_hz: 10.0        # [Optional] Downsample to at most one message per 1/max_rate_hz
+                              # when this profile is selected. Omit to keep every message.
+  - name: /odom
+  - name: /camera/image_raw
+    type: "sensor_msgs/msg/Image"  # [Optional] Explicit type/qos, same as topic_details above.
+    qos: "SENSOR_DATA"             # If omitted, both are resolved from the ROS graph at
+                                    # subscribe time (type from get_topic_names_and_types(),
+                                    # QoS adapted to what the topic's publishers actually offer,
+                                    # the way `ros2 bag record` does) -- retried on a timer if
+                                    # the publisher hasn't appeared yet.
+```
+
+A profile can also nest other profiles via `include`, which is how you get "multiple profiles at
+once" out of a single `TriggerSnapshot.profile` selection instead of adding request-side
+complexity for it:
+
+```yaml
+# capture_profiles/incident.yaml
+include: [sensors, video]  # a single name also works: include: sensors
+topics:                    # [Optional] needs no topics of its own if it only combines others
+  - name: /odom
+    max_rate_hz: 5.0       # own entry overrides the inherited one (sensors' /odom) by name
+  - name: /extra_topic
+```
+
+Only `topics` are inherited. Included profiles are merged in list order (a later one overrides
+an earlier one on a shared topic name), and this profile's own `topics` always win over anything
+inherited, regardless of include order. A profile that includes something unknown, or that ends
+up with no topics once its includes are resolved, or that's part of an include cycle, is dropped
+(reported as a warning at startup) -- the rest of the directory still loads.
+
+Every topic named by any profile file is buffered continuously from startup, same as the
+`topics` list -- there is no "subscribe only while this profile is active" mode. A late
+subscription would miss everything published before it connects for any VOLATILE topic
+(the default for most sensor topics), defeating the point of buffering ahead of a trigger.
+
+Select a profile in a `TriggerSnapshot` request via the new `profile` field (`""` = today's
+behavior: `topics` on the request, or the full buffer, exactly as before). A named profile's
+`max_rate_hz` always applies to that write, regardless of the request's `throttle_msgs` flag.
+An unknown profile name is rejected at goal-acceptance time.
+
+Note: `rosbag_preset_profile` (above) is an unrelated, differently-named existing setting --
+it's the rosbag2 storage compression preset (e.g. `zstd_small`), not a capture profile.
 
 ### Client
 

@@ -24,7 +24,11 @@ bool interval_mode_single_msg        # If true, write one message per applicable
                                      # compressed Image, or any type listed in interval_single_msg_types). Prefer exact
                                      # semantic stamp == msg_timestamp; if none in the buffer window, use closest time and log a warning.
                                      # If false, all messages within the interval will be included
-string rosbag_preset_profile         # Name of the rosbag2 profile to use for the snapshot. If empty, the default profile will be used  
+string rosbag_preset_profile         # Name of the rosbag2 profile to use for the snapshot. If empty, the default profile will be used
+string profile                       # Name of a capture profile (from capture_profiles_dir) selecting which topics to
+                                     # write and their per-topic max_rate_hz. If empty, behaves exactly as today: topics
+                                     # (if set) or all buffered topics are written, honoring throttle_msgs. Unlike
+                                     # throttle_period/throttle_msgs, a named profile's max_rate_hz always applies.
 ---
 # result definition
 bool success                         # True if snapshot successfully written to disk

@@ -686,7 +686,8 @@ const int Snapshotter::QUEUE_SIZE = 10;
 Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 : rclcpp::Node("snapshotter", options),
   recording_(true),
-  writing_(false)
+  writing_(false),
+  topic_resolver_(this)
 {
   parseOptionsFromParams();
 
@@ -715,6 +716,11 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     subscribe(details, queue);
   }
 
+  // Union of every capture profile's topics: subscribe whatever resolves now,
+  // queue the rest for the retry timer below. No-op if capture_profiles_dir_
+  // was never set (profiles_ is empty).
+  subscribeProfileTopics();
+
   // Now that subscriptions are setup, setup service servers for writing and pausing
   trigger_snapshot_action_server_ = rclcpp_action::create_server<TriggerSnapAction>(
       this,
@@ -725,12 +731,13 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   enable_server_ = create_service<SetBool>(
     "enable_snapshot", std::bind(&Snapshotter::enableCb, this, _1, _2, _3));
 
-  // Start timer to poll for topics
-  if (options_.all_topics_) {
+  // Start timer to poll for topics (all_topics_ discovery) and/or retry
+  // resolving pending capture-profile topics.
+  if (options_.all_topics_ || !pending_profile_topics_.empty()) {
     poll_topic_timer_ =
       create_wall_timer(
       std::chrono::duration(1s),
-      std::bind(&Snapshotter::pollTopics, this));
+      std::bind(&Snapshotter::pollAndResolveTopics, this));
   }
 }
 
@@ -863,6 +870,25 @@ void Snapshotter::parseOptionsFromParams()
       RCLCPP_ERROR(get_logger(), "interval_single_msg_types must be an array of strings.");
       throw ex;
     }
+  }
+
+  try {
+    options_.capture_profiles_dir_ =
+      declare_parameter<std::string>("capture_profiles_dir", "");
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    RCLCPP_ERROR(get_logger(), "capture_profiles_dir must be a string.");
+    throw ex;
+  }
+
+  if (!options_.capture_profiles_dir_.empty()) {
+    auto parsed = loadProfilesDir(options_.capture_profiles_dir_);
+    for (const auto & warning : parsed.warnings) {
+      RCLCPP_WARN(get_logger(), "capture_profiles_dir: %s", warning.c_str());
+    }
+    profiles_.profiles = parsed.profiles.profiles;
+    RCLCPP_INFO(
+      get_logger(), "Loaded %zu capture profile(s) from %s",
+      profiles_.profiles.size(), options_.capture_profiles_dir_.c_str());
   }
 
   try {
@@ -1131,7 +1157,8 @@ bool Snapshotter::writeTopic(
   MessageQueue & message_queue,
   const TopicDetails & topic_details,
   const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-  rclcpp::Time& request_time)
+  rclcpp::Time& request_time,
+  bool force_throttle)
 {
   auto req = goal_handle->get_goal();
   MessageQueue::range_t range;
@@ -1194,7 +1221,7 @@ bool Snapshotter::writeTopic(
       return false;
     }
     
-    if (!req->use_interval_mode && req->throttle_msgs && !h264_throttle_skip &&
+    if (!req->use_interval_mode && (req->throttle_msgs || force_throttle) && !h264_throttle_skip &&
         topic_details.throttle_period > 0.0 &&
         msg_it->time.nanoseconds() - prev_msg_time <= topic_details.throttle_period * 1e9)
     {
@@ -1289,6 +1316,13 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
+  if (!goal->profile.empty() && profiles_.find(goal->profile) == nullptr) {
+    RCLCPP_WARN(
+      this->get_logger(), "Rejecting request to snapshot. Unknown capture profile '%s'.",
+      goal->profile.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -1365,9 +1399,31 @@ void Snapshotter::createBag(
   bool success = true;
   std::string message = req->filename;
   float count_topics = 0.0;
-  if (req->topics.size() && req->topics.at(0).name.size()) {
+
+  // A named profile picks the topic list and each topic's max_rate_hz
+  // (as throttle_period, via the same override mechanism a request's own
+  // topics[].throttle_period already uses below). Empty profile: unchanged
+  // behavior, using req->topics as-is.
+  bool use_profile = !req->profile.empty();
+  std::vector<DetailsMsg> profile_topics;
+  if (use_profile) {
+    const CaptureProfile * profile = profiles_.find(req->profile);
+    // handle_goal() already rejected an unknown profile; guard again in case
+    // profiles_ ever changes between goal acceptance and execution.
+    if (profile != nullptr) {
+      for (const auto & spec : profile->topics) {
+        DetailsMsg msg{};
+        msg.name = spec.name;
+        msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
+        profile_topics.push_back(msg);
+      }
+    }
+  }
+  const std::vector<DetailsMsg> & topics_to_write = use_profile ? profile_topics : req->topics;
+
+  if (topics_to_write.size() && topics_to_write.at(0).name.size()) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
-    for (auto & topic : req->topics) {
+    for (auto & topic : topics_to_write) {
       if (goal_handle->is_canceling()) {
         result->success = false;
         result->message = "Rosbag creation canceled";
@@ -1392,13 +1448,13 @@ void Snapshotter::createBag(
 
       if (message_queue->size_ == 0) RCLCPP_DEBUG(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
-      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time)) {
+      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time, use_profile)) {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
       }
       feedback->duration = (this->now() - request_time).seconds();
-      feedback->progress = 100 * (count_topics / req->topics.size());
+      feedback->progress = 100 * (count_topics / topics_to_write.size());
       feedback->message = "Writing topic " + topic.name + " to bag file.";
       goal_handle->publish_feedback(feedback);
     }
@@ -1539,6 +1595,16 @@ void Snapshotter::enableCb(
   res->success = true;
 }
 
+bool Snapshotter::isBuffered(const std::string & name) const
+{
+  for (const auto & buf : buffers_) {
+    if (buf.first.name == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void Snapshotter::pollTopics()
 {
   const auto topic_names_and_types = get_topic_names_and_types();
@@ -1552,6 +1618,12 @@ void Snapshotter::pollTopics()
     if (name_type.second.size() > 1) {
       RCLCPP_ERROR(get_logger(), "Subscribed topic has more than one associated type.");
       return;
+    }
+
+    if (isBuffered(name_type.first)) {
+      // Already buffered, e.g. via a capture profile -- don't double-subscribe
+      // under all_topics_'s own (potentially different) QoS.
+      continue;
     }
 
     TopicDetails details{};
@@ -1569,6 +1641,99 @@ void Snapshotter::pollTopics()
       subscribe(details, queue);
     }
   }
+}
+
+void Snapshotter::pollAndResolveTopics()
+{
+  // Profile topics resolve first, so a topic a profile wants (with its
+  // adapted QoS) is never grabbed first by all_topics_'s generic, non-adaptive
+  // QoS(5) default -- isBuffered() only prevents a double subscription, it
+  // doesn't pick which side wins the race, so the order here decides that.
+  resolvePendingProfileTopics();
+  if (options_.all_topics_) {
+    pollTopics();
+  }
+}
+
+std::map<std::string, ProfileTopicSpec> Snapshotter::uniqueProfileTopics() const
+{
+  std::map<std::string, ProfileTopicSpec> unique_topics;
+  for (const auto & profile_pair : profiles_.profiles) {
+    for (const auto & topic_spec : profile_pair.second.topics) {
+      unique_topics.emplace(topic_spec.name, topic_spec);
+    }
+  }
+  return unique_topics;
+}
+
+bool Snapshotter::subscribeResolvedTopic(
+  const std::string & name, const std::string & type, const rclcpp::QoS & qos)
+{
+  if (isBuffered(name)) {
+    return true;  // already buffered via the static topics_ list or another profile
+  }
+
+  TopicDetails details{};
+  details.name = name;
+  details.type = type;
+  details.qos = qos;
+
+  SnapshotterTopicOptions topic_options;
+  fixTopicOptions(topic_options);
+  auto queue = std::make_shared<MessageQueue>(topic_options, get_logger());
+  buffers_.emplace(details, queue);
+  subscribe(details, queue);
+  RCLCPP_INFO(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
+  return true;
+}
+
+bool Snapshotter::resolveAndSubscribeProfileTopic(const ProfileTopicSpec & spec)
+{
+  if (isBuffered(spec.name)) {
+    return true;  // already buffered
+  }
+
+  std::string type = spec.type;
+  if (type.empty() && !topic_resolver_.resolveType(spec.name, type)) {
+    return false;
+  }
+
+  rclcpp::QoS qos(5);
+  if (!spec.qos.empty()) {
+    qos = qos_string_to_qos(spec.qos);
+  } else if (!topic_resolver_.resolveQos(spec.name, qos)) {
+    return false;
+  }
+
+  return subscribeResolvedTopic(spec.name, type, qos);
+}
+
+void Snapshotter::subscribeProfileTopics()
+{
+  for (const auto & entry : uniqueProfileTopics()) {
+    if (!resolveAndSubscribeProfileTopic(entry.second)) {
+      RCLCPP_WARN(
+        get_logger(), "Profile topic %s has no publisher yet, will retry.", entry.first.c_str());
+      pending_profile_topics_.push_back(entry.first);
+    }
+  }
+}
+
+void Snapshotter::resolvePendingProfileTopics()
+{
+  if (pending_profile_topics_.empty()) {
+    return;
+  }
+
+  auto unique_topics = uniqueProfileTopics();
+  std::vector<std::string> still_pending;
+  for (const auto & name : pending_profile_topics_) {
+    auto it = unique_topics.find(name);
+    if (it != unique_topics.end() && !resolveAndSubscribeProfileTopic(it->second)) {
+      still_pending.push_back(name);
+    }
+  }
+  pending_profile_topics_ = still_pending;
 }
 
 SnapshotterClient::SnapshotterClient(const rclcpp::NodeOptions & options)

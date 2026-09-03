@@ -29,6 +29,8 @@ find_package(ffmpeg_image_transport_msgs REQUIRED)
 find_package(foxglove_msgs REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(rosbag2_transport REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
@@ -61,6 +63,7 @@ set(DEPENDENCIES
   foxglove_msgs
   rosidl_typesupport_introspection_cpp
   visualization_msgs
+  rosbag2_transport
 )
 
 set(executable_name snapshotter)
@@ -70,6 +73,8 @@ add_library(${library_name} SHARED
   include/rosbag2_snapshot/snapshotter.hpp
 # src/snapshot.cpp
   src/snapshotter.cpp
+  src/capture_profiles.cpp
+  src/topic_resolver.cpp
 )
 
 add_library(encoder SHARED
@@ -88,6 +93,7 @@ add_executable(${executable_name}
 target_link_libraries( ${library_name}
   PkgConfig::LIBAV
   encoder
+  yaml-cpp
 )
 
 ament_target_dependencies(${library_name}
@@ -122,5 +128,15 @@ install(TARGETS encoder
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_capture_profiles
+    test/test_capture_profiles.cpp
+    src/capture_profiles.cpp
+  )
+  target_include_directories(test_capture_profiles PRIVATE include)
+  target_link_libraries(test_capture_profiles yaml-cpp)
+endif()
 
 ament_package()

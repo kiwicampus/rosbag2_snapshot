@@ -58,6 +58,8 @@
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+#include "rosbag2_snapshot/capture_profiles.hpp"
+#include "rosbag2_snapshot/topic_resolver.hpp"
 
 namespace rosbag2_snapshot
 {
@@ -181,6 +183,10 @@ struct SnapshotterOptions
   // deployment lists its own here (interval_single_msg_types param). Only works for types
   // that really have a header.stamp, see HeaderStampReader.
   std::unordered_set<std::string> interval_single_msg_types_;
+  // Directory of "<name>.yaml" capture profile files (see capture_profiles.hpp).
+  // Optional; "" means no profiles are configured and only the static topics_
+  // list below exists, exactly as before this feature.
+  std::string capture_profiles_dir_;
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations
@@ -299,6 +305,16 @@ private:
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_server_;
   rclcpp::TimerBase::SharedPtr poll_topic_timer_;
 
+  // Capture profiles loaded from options_.capture_profiles_dir_ at startup.
+  // Populated once in the constructor and read-only afterward, so reading it
+  // from another thread (e.g. the detached createBag thread) needs no lock,
+  // same as options_.interval_single_msg_types_ today.
+  ProfileSet profiles_;
+  TopicResolver topic_resolver_;
+  // Profile topics whose publisher hasn't appeared yet. Retried on
+  // poll_topic_timer_ alongside pollTopics() (all_topics_ discovery).
+  std::vector<std::string> pending_profile_topics_;
+
   // Convert parameter values into a SnapshotterOptions object
   void parseOptionsFromParams();
   // Replace individual topic limits with node defaults if they are
@@ -343,14 +359,40 @@ private:
   void resume();
   // Poll master for new topics
   void pollTopics();
+  // True if a topic of this name is already in buffers_, regardless of its
+  // resolved type/QoS. Used to keep all_topics_ discovery and capture-profile
+  // discovery from double-subscribing the same topic.
+  bool isBuffered(const std::string & name) const;
+  // Timer callback: runs pollTopics() (if all_topics_) and
+  // resolvePendingProfileTopics(), so a single poll_topic_timer_ covers both.
+  void pollAndResolveTopics();
+  // Union of every profile's topics, keyed by name (first profile to mention
+  // a topic wins its type/qos/max_rate_hz if more than one does).
+  std::map<std::string, ProfileTopicSpec> uniqueProfileTopics() const;
+  // Resolves (if needed) and subscribes one profile topic. Returns true if it
+  // is now buffered (including if it already was); false if still pending.
+  bool resolveAndSubscribeProfileTopic(const ProfileTopicSpec & spec);
+  // Startup pass over every profile topic; unresolved ones go into
+  // pending_profile_topics_ for the retry timer.
+  void subscribeProfileTopics();
+  // Retries pending_profile_topics_ against the current ROS graph.
+  void resolvePendingProfileTopics();
+  // Creates the buffer and subscribes a topic whose type/QoS are already
+  // known. No-op (returns true) if a topic of this name is already buffered.
+  bool subscribeResolvedTopic(
+    const std::string & name, const std::string & type, const rclcpp::QoS & qos);
   // Write the parts of message_queue within the time constraints of req to the queue
   // If returns false, there was an error opening/writing the bag and an error message
   // was written to res.message
+  // force_throttle: when true, each topic's throttle_period (if any) is applied
+  // regardless of req->throttle_msgs -- used when topics_details came from a
+  // named capture profile, whose max_rate_hz always applies.
   bool writeTopic(
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
-    rclcpp::Time& request_time);
+    rclcpp::Time& request_time,
+    bool force_throttle = false);
 
   // Override the topic details with the topic details from the goal
   void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);

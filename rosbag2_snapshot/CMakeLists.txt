@@ -25,7 +25,6 @@ find_package(rosbag2_snapshot_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(foxglove_msgs REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosbag2_transport REQUIRED)
@@ -34,12 +33,26 @@ find_package(yaml-cpp REQUIRED)
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
 
-pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
+# H264 image compression needs foxglove_msgs (FFMPEGEncoder's output type) on
+# top of OpenCV/cv_bridge/FFmpeg -- not published for every ROS distro/OS
+# combination this package builds on. JPG/PNG compression (OpenCV/cv_bridge
+# alone) stays available either way; only the H264 path is compiled out when
+# it's missing, same pattern this package's own consumers use elsewhere for
+# an optional heavy dependency (e.g. object_detection's ONNX Runtime stub).
+find_package(foxglove_msgs QUIET)
+pkg_check_modules(LIBAV QUIET IMPORTED_TARGET
     libavcodec
     libswresample
     libswscale
     libavutil
   )
+if(foxglove_msgs_FOUND AND LIBAV_FOUND)
+  set(ROSBAG2_SNAPSHOT_HAVE_H264 TRUE)
+else()
+  set(ROSBAG2_SNAPSHOT_HAVE_H264 FALSE)
+  message(WARNING "rosbag2_snapshot: foxglove_msgs and/or FFmpeg not found -- "
+                   "building without H264 image compression (JPG/PNG still available)")
+endif()
 
 include_directories(
   include
@@ -58,11 +71,13 @@ set(DEPENDENCIES
   sensor_msgs
   OpenCV
   cv_bridge
-  foxglove_msgs
   rosidl_typesupport_introspection_cpp
   visualization_msgs
   rosbag2_transport
 )
+if(ROSBAG2_SNAPSHOT_HAVE_H264)
+  list(APPEND DEPENDENCIES foxglove_msgs)
+endif()
 
 set(executable_name snapshotter)
 set(library_name ${executable_name}_core)
@@ -74,33 +89,35 @@ add_library(${library_name} SHARED
   src/topic_resolver.cpp
 )
 
-add_library(encoder SHARED
-  src/ffmpeg_encoding/ffmpeg_encoder.cpp
-  src/ffmpeg_encoding/tdiff.cpp
-  src/ffmpeg_encoding/utils.cpp
-)
-ament_target_dependencies(encoder
-  ${DEPENDENCIES}
-)
-
 add_executable(${executable_name}
   src/main.cpp
 )
 
-target_link_libraries( ${library_name}
-  PkgConfig::LIBAV
-  encoder
-  yaml-cpp
+target_link_libraries(${library_name} yaml-cpp)
+target_link_libraries(${executable_name} ${library_name})
+
+if(ROSBAG2_SNAPSHOT_HAVE_H264)
+  add_library(encoder SHARED
+    src/ffmpeg_encoding/ffmpeg_encoder.cpp
+    src/ffmpeg_encoding/tdiff.cpp
+    src/ffmpeg_encoding/utils.cpp
+  )
+  ament_target_dependencies(encoder ${DEPENDENCIES})
+  target_link_libraries(${library_name} PkgConfig::LIBAV encoder)
+  target_link_libraries(${executable_name} PkgConfig::LIBAV encoder)
+  install(TARGETS encoder
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+endif()
+
+target_compile_definitions(${library_name} PUBLIC
+  $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_H264}>:ROSBAG2_SNAPSHOT_HAVE_H264>
 )
 
 ament_target_dependencies(${library_name}
   ${DEPENDENCIES}
-)
-
-target_link_libraries(${executable_name}
-  ${library_name}
-  PkgConfig::LIBAV
-  encoder
 )
 ament_target_dependencies(${executable_name}
   ${DEPENDENCIES}
@@ -117,12 +134,6 @@ install(TARGETS ${library_name}
 
 install(TARGETS ${executable_name}
   DESTINATION lib/${PROJECT_NAME}
-)
-
-install(TARGETS encoder
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
 )
 
 if(BUILD_TESTING)

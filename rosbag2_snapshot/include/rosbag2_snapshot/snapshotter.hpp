@@ -60,7 +60,9 @@
 #include <vector>
 #include <thread>
 
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
+#endif
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/forward_capture.hpp"
 #include "rosbag2_snapshot/shared_memory_budget.hpp"
@@ -72,7 +74,9 @@ namespace rosbag2_snapshot
 using namespace std::chrono_literals;  // NOLINT
 using DetailsMsg = rosbag2_snapshot_msgs::msg::TopicDetails;
 using TriggerSnapAction = rosbag2_snapshot_msgs::action::TriggerSnapshot;
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
 using namespace ffmpeg_image_transport;
+#endif
 
 /* Configuration for a the compression settings of an image topic
 
@@ -83,7 +87,9 @@ struct ImageCompressionOptions
   std::string format; // can be jpg or png
   cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
   int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
+#endif
 };
 
 struct TopicDetails

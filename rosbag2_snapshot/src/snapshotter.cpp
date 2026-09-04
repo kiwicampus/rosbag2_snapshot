@@ -863,9 +863,11 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
     }
   }
 
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   // Init encoder for h264 in case any event triggers the use of h264
   img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
   img_compression_opts.encoder->setParameters(this, "h264.");
+#endif
 
   return img_compression_opts;
 }
@@ -1289,12 +1291,23 @@ bool Snapshotter::writeTopic(
   std::vector<int> compression_params; 
   if(topic_details.img_compression_opts_.use_compression)
   {
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
     if (req->use_h264)
     {
       RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression", topic_details.name.c_str());
       tm.type = "foxglove_msgs/msg/CompressedVideo";
     }
     else
+#else
+    if (req->use_h264)
+    {
+      RCLCPP_ERROR(
+        get_logger(),
+        "H264 requested for topic %s but this build has no foxglove_msgs/FFmpeg support; "
+        "falling back to %s compression",
+        topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str());
+    }
+#endif
     {
       RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
       compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
@@ -1317,7 +1330,13 @@ bool Snapshotter::writeTopic(
 
   double prev_msg_time = 0.0;
   auto start = std::chrono::high_resolution_clock::now();
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   bool h264_throttle_skip = req->use_h264 && topic_details.h264_throttle_skip;
+#else
+  // H264 never actually happens without support for it (see the fallback
+  // above), so this is never true regardless of what the request asked for.
+  bool h264_throttle_skip = false;
+#endif
   if(topic_details.queue_depth > 0 && !req->use_interval_mode)
   {
     range.first = std::max(range.first, range.second - topic_details.queue_depth);
@@ -1398,6 +1417,7 @@ bool Snapshotter::writeTopic(
         cv_img = cv_bridge_img->image;
       }
 
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
       if (req->use_h264)
       {
         auto encoder = topic_details.img_compression_opts_.encoder;
@@ -1406,7 +1426,7 @@ bool Snapshotter::writeTopic(
           RCLCPP_ERROR(get_logger(), "Couldn't initialize H264 encoder!");
           return false;
         }
-        
+
         foxglove_msgs::msg::CompressedVideo compressed_img;
         encoder->encodeImage(cv_img, raw_img.header, now());
         compressed_img = encoder->getCompressedImage();
@@ -1414,6 +1434,7 @@ bool Snapshotter::writeTopic(
         bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
       }
       else
+#endif
       {
         sensor_msgs::msg::CompressedImage compressed_img;
         cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);

@@ -61,6 +61,7 @@
 
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
+#include "rosbag2_snapshot/forward_capture.hpp"
 #include "rosbag2_snapshot/staging_path.hpp"
 #include "rosbag2_snapshot/topic_resolver.hpp"
 
@@ -184,6 +185,10 @@ struct SnapshotterOptions
   rclcpp::Duration default_duration_limit_;
   // Memory limit to use for a topic's buffer if one is not specified
   int32_t default_memory_limit_;
+  // Upper bound on a goal's post_duration_s (forward/live capture window).
+  // <= 0 disables forward captures entirely, not "unlimited" -- see
+  // forward_capture.hpp's forwardCaptureWithinLimit().
+  double max_post_duration_s_ = 300.0;
   // Flag if all topics should be recorded
   bool all_topics_;
   // Flag to tell if compression should be used

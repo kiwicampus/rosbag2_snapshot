@@ -631,6 +631,11 @@ MessageQueue::range_t MessageQueue::intervalFromTimesMsg(Time const & msg_timest
 
 const int Snapshotter::QUEUE_SIZE = 10;
 
+// Poll period for createBag()'s forward-capture wait loop: balances cancel
+// responsiveness/deadline precision against feedback-publish volume for a
+// wait that can run up to max_post_duration_s.
+static constexpr std::chrono::milliseconds kForwardPollPeriod{500};
+
 Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 : rclcpp::Node("snapshotter", options),
   recording_(true),
@@ -808,6 +813,14 @@ void Snapshotter::parseOptionsFromParams()
       declare_parameter<double>("default_memory_limit", 300.0); // Safe limit for concurrent operations
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "default_memory_limit is of incorrect type.");
+    throw ex;
+  }
+
+  try {
+    options_.max_post_duration_s_ =
+      declare_parameter<double>("max_post_duration_s", 300.0);  // 5 min default cap
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    RCLCPP_ERROR(get_logger(), "max_post_duration_s is of incorrect type.");
     throw ex;
   }
 
@@ -1295,6 +1308,17 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
+  if (isForwardCaptureRequest(goal->post_duration_s) &&
+    !forwardCaptureWithinLimit(goal->post_duration_s, options_.max_post_duration_s_))
+  {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Rejecting request to snapshot: post_duration_s=%.1f exceeds this node's "
+      "max_post_duration_s (%.1f), or forward captures are disabled.",
+      goal->post_duration_s, options_.max_post_duration_s_);
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   // Reject only a second goal for the exact same filename -- two captures
   // opening the same staging path concurrently would corrupt each other's
   // output. This is deliberately narrow: it does not limit concurrency
@@ -1393,12 +1417,15 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   }
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
-  {
+  if (!isForwardCaptureRequest(req->post_duration_s)) {
     std::shared_lock<std::shared_mutex> read_lock(state_lock_);
     for (const auto& buffer : buffers_) {
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
+  // else: left empty here -- createBag() takes the (deferred) clone itself,
+  // once the forward window elapses or the goal is canceled, so it captures
+  // everything buffered up to that later point instead of this one.
 
   PendingCapture capture;
   capture.goal_handle = goal_handle;
@@ -1429,6 +1456,44 @@ void Snapshotter::createBag(PendingCapture capture)
   bool success = true;
   std::string message = req->filename;
   float count_topics = 0.0;
+
+  if (isForwardCaptureRequest(req->post_duration_s)) {
+    // request_time is kept anchored at goal-acceptance (not recomputed
+    // after the wait below): it's also the reference instant for
+    // writeTopic()'s old-timestamp-override math and for
+    // refreshBuffer(request_time) further down, both of which mean "when
+    // was this capture requested," same as in the immediate-capture case.
+    const rclcpp::Time deadline =
+      request_time + rclcpp::Duration::from_seconds(req->post_duration_s);
+    while (this->now() < deadline) {
+      if (goal_handle->is_canceling()) {
+        finalizeCapture(
+          capture, false, "Canceled while waiting for forward capture window",
+          result, 0, request_time);
+        goal_handle->canceled(result);
+        return;
+      }
+      feedback->duration = (this->now() - request_time).seconds();
+      feedback->progress = 100.0f * std::min(
+        1.0f, static_cast<float>(feedback->duration / req->post_duration_s));
+      feedback->message = "Waiting for forward capture window to elapse...";
+      goal_handle->publish_feedback(feedback);
+      std::this_thread::sleep_for(kForwardPollPeriod);
+    }
+
+    // Deferred clone: every topic has kept being buffered by topicCb() the
+    // whole time (recording_ permitting), exactly as when idle -- this is
+    // the same clone handle_accepted takes for an immediate capture, just
+    // taken later so it includes what arrived during the wait. Callers
+    // using this mode leave req->stop_time at its default (0), and
+    // rangeFromTimes() already treats stop_time==0 as "no upper trim"
+    // (unchanged), so writeTopic()'s unmodified call below naturally
+    // picks up everything through this point.
+    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    for (const auto & buffer : buffers_) {
+      cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
+    }
+  }
 
   // A named profile picks the topic list and each topic's max_rate_hz
   // (as throttle_period, via the same override mechanism a request's own

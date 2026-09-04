@@ -29,6 +29,13 @@ string profile                       # Name of a capture profile (from capture_p
                                      # write and their per-topic max_rate_hz. If empty, behaves exactly as today: topics
                                      # (if set) or all buffered topics are written, honoring throttle_msgs. Unlike
                                      # throttle_period/throttle_msgs, a named profile's max_rate_hz always applies.
+float32 post_duration_s              # If > 0, defer writing until this many seconds after the goal is accepted
+                                     # (or until the goal is canceled, whichever comes first), so the bag also
+                                     # includes messages that arrive after the trigger -- a forward/live capture.
+                                     # Every buffered topic keeps being buffered during the wait exactly as
+                                     # always; nothing new is subscribed. If 0 (default), behaves exactly as
+                                     # today: written immediately from whatever's already buffered. Rejected at
+                                     # goal-acceptance time if it exceeds the node's max_post_duration_s parameter.
 ---
 # result definition
 bool success                         # True if snapshot successfully written to disk

@@ -23,6 +23,9 @@ Buffer recent messages until triggered to write or trigger an already running in
   ros__parameters:
     default_duration_limit: 10.0           # [Optional, default=-1] Maximum time difference between newest and oldest message in seconds
     default_memory_limit: 64.0             # [Optional, default=-1] Maximum memory used by messages in each topic's buffer, in MB
+    max_post_duration_s: 300.0             # [Optional, default=300] Upper bound on a goal's post_duration_s
+                                            # (forward/live capture window), in seconds. <= 0 disables forward
+                                            # captures entirely. See "Forward (live) captures" below.
     interval_single_msg_types:             # [Optional] Message types narrowed to a single message by
       - "sensor_msgs/msg/NavSatFix"        # interval_mode_single_msg (see TriggerSnapshot), in addition to
                                             # CameraInfo, ImageMarker and compressed Image, which always get
@@ -119,6 +122,30 @@ leftover `.tmp` from a previous crash is reclaimed the next time that exact file
 requested again (there's no startup sweep, since this package has no "storage root" concept to
 bound one to).
 
+### Forward (live) captures
+
+By default a `TriggerSnapshot` goal writes immediately from whatever's already buffered -- a
+backward-looking dump. Setting `post_duration_s` (float, seconds) on the goal turns it into a
+forward/live capture instead: writing is deferred until that many seconds after the goal is
+accepted, so the resulting bag also includes messages that arrive *after* the trigger. Every
+buffered topic keeps being buffered by its normal subscription the whole time, exactly as when
+idle -- nothing new is subscribed and no separate live-forwarding mechanism exists, so the
+buffer's own `duration_limit`/`memory_limit` (node default or per-topic override) must be large
+enough to still hold everything from `start_time` through `trigger_time + post_duration_s` once
+the wait ends, the same constraint that already governs how far into the past `start_time` can
+reach today.
+
+There's no separate "stop capture" call: since `trigger_snapshot` is already a ROS 2 action,
+canceling the goal (e.g. `ros2 action send_goal ... ` with Ctrl-C, or an action client's
+`cancel_goal_async()`) ends the wait early and finalizes the bag with whatever was buffered up
+to that point, the same as a timeout would.
+
+The `max_post_duration_s` node parameter (default `300.0`, i.e. 5 minutes) caps how long a
+forward capture may be requested to wait -- a goal requesting more than this is rejected at
+goal-acceptance time, not accepted and then left to run. Set it to `0` (or negative) to disable
+forward captures entirely; every existing caller that never sets `post_duration_s` (leaving it at
+its default `0.0`) is completely unaffected either way.
+
 ### Status & capture-event topics
 
 Two additional topics report on the node's own state, independent of the per-request
@@ -150,6 +177,12 @@ $ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSn
 
 ```
 $ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '', profile: 'sensors'}"
+```
+
+###### Trigger a forward (live) capture that also includes the next 5 seconds
+
+```
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '', post_duration_s: 5.0}" --feedback
 ```
 
 ###### Pause/resume buffering manually (this one really is a service)

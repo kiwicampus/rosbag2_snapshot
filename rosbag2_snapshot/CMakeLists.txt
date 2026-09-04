@@ -168,6 +168,12 @@ if(BUILD_TESTING)
     test/test_shared_memory_budget.cpp
   )
   target_include_directories(test_shared_memory_budget PRIVATE include)
+
+  # Pure/ROS-free, exercises only accepted_filename.hpp.
+  ament_add_gtest(test_accepted_filename
+    test/test_accepted_filename.cpp
+  )
+  target_include_directories(test_accepted_filename PRIVATE include)
 endif()
 
 ament_package()

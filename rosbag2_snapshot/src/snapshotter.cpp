@@ -1519,11 +1519,13 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
   const rclcpp_action::GoalUUID &,
   std::shared_ptr<const TriggerSnapAction::Goal> goal)
 {
-  // Check if requested ends in .bag
-  size_t ind = goal->filename.rfind(".bag");
-  if (goal->filename.empty() || ind == string::npos || ind != goal->filename.size() - 4) 
-  {
-    RCLCPP_WARN(this->get_logger(), "Rejecting request to snapshot. Empty filename or not ending in .bag");
+  // filename becomes the literal on-disk final path (see finalizeCapture()),
+  // so it must end in .bag (data_server_cpp's own directory-mode naming
+  // convention) or .mcap (a use_flat_output=true caller's real destination).
+  if (!hasAcceptedGoalFilename(goal->filename)) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Rejecting request to snapshot. Empty filename or not ending in .bag/.mcap");
     return rclcpp_action::GoalResponse::REJECT;
   }
 

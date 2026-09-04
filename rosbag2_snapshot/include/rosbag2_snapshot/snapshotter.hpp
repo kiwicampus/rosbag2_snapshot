@@ -63,6 +63,7 @@
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #endif
+#include "rosbag2_snapshot/accepted_filename.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/forward_capture.hpp"
 #include "rosbag2_snapshot/shared_memory_budget.hpp"

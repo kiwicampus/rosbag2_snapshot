@@ -36,6 +36,11 @@ float32 post_duration_s              # If > 0, defer writing until this many sec
                                      # always; nothing new is subscribed. If 0 (default), behaves exactly as
                                      # today: written immediately from whatever's already buffered. Rejected at
                                      # goal-acceptance time if it exceeds the node's max_post_duration_s parameter.
+bool use_flat_output                 # If false (default), filename ends up a bag directory (rosbag2's usual
+                                     # <filename>/<basename>_0.mcap + metadata.yaml layout) -- unchanged from
+                                     # every existing caller. If true, only the single .mcap is kept, moved to
+                                     # exactly filename, self-describing (embedded schema + offered QoS) so it
+                                     # opens standalone with no surrounding directory.
 ---
 # result definition
 bool success                         # True if snapshot successfully written to disk

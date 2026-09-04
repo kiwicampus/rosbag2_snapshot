@@ -38,6 +38,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <filesystem>
+#include <fstream>
 
 #include <algorithm>
 #include <climits>
@@ -122,6 +123,62 @@ std::filesystem::path findMcapFile(const std::filesystem::path & directory)
     }
   }
   return {};
+}
+
+// The mcap plugin names the data file after bag_dir's basename *at the time
+// it was opened* (<that_name>_0.mcap). Since bag_dir is opened under its
+// staging name and later renamed into place, the embedded file and
+// metadata.yaml's relative_file_paths/files[].path both still carry the
+// old name -- this renames the file and patches both to match bag_dir's
+// current (final) basename, which is what a consumer that reconstructs the
+// data file path itself (rather than reading metadata.yaml) needs.
+void renameBagFileToMatchDirectory(const std::filesystem::path & bag_dir)
+{
+  const std::filesystem::path mcap = findMcapFile(bag_dir);
+  if (mcap.empty()) {
+    return;
+  }
+  const std::string old_name = mcap.filename().string();
+  const std::string new_name = bag_dir.filename().string() + "_0.mcap";
+  if (old_name == new_name) {
+    return;
+  }
+
+  std::error_code ec;
+  std::filesystem::rename(mcap, mcap.parent_path() / new_name, ec);
+  if (ec) {
+    return;
+  }
+
+  const std::filesystem::path metadata_path = bag_dir / "metadata.yaml";
+  std::error_code exists_ec;
+  if (!std::filesystem::exists(metadata_path, exists_ec)) {
+    return;
+  }
+  try {
+    YAML::Node metadata = YAML::LoadFile(metadata_path.string());
+    YAML::Node info = metadata["rosbag2_bagfile_information"];
+    if (info["relative_file_paths"]) {
+      YAML::Node paths = info["relative_file_paths"];
+      for (std::size_t i = 0; i < paths.size(); ++i) {
+        if (paths[i].as<std::string>() == old_name) {
+          paths[i] = new_name;
+        }
+      }
+    }
+    if (info["files"]) {
+      for (auto file : info["files"]) {
+        if (file["path"] && file["path"].as<std::string>() == old_name) {
+          file["path"] = new_name;
+        }
+      }
+    }
+    std::ofstream(metadata_path) << metadata;
+  } catch (const std::exception &) {
+    // metadata.yaml is left stale; the file itself is still correctly
+    // named and readable by anything that finds it by name rather than
+    // through metadata.yaml.
+  }
 }
 
 namespace introspection = rosidl_typesupport_introspection_cpp;
@@ -1603,6 +1660,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   capture.staging_path = staging_path;
   capture.final_path = final_path;
   capture.profile = req->profile;
+  capture.flat_output = req->use_flat_output;
 
   // std::async(launch::async, ...) instead of a detached thread: the
   // returned future is kept in capture_futures_ so ~Snapshotter() can wait
@@ -1787,7 +1845,31 @@ void Snapshotter::finalizeCapture(
   // actual close() failure leaves the file at its staging path, since its
   // integrity can't be vouched for.
   std::filesystem::path saved_path = capture.staging_path;
-  if (file_is_valid) {
+  if (file_is_valid && !capture.flat_output) {
+    // Default: rosbag2's usual bag-directory layout, unchanged for every
+    // caller that doesn't ask for flat_output (e.g. data_server_cpp, which
+    // hard-codes <filename>/<basename>_0.mcap everywhere it reads a
+    // capture back).
+    saved_path = success ? capture.final_path : partialPathFor(capture.final_path);
+    std::error_code ec;
+    std::filesystem::rename(capture.staging_path, saved_path, ec);
+    if (ec) {
+      success = false;
+      saved_path = capture.staging_path;
+      message = "Failed to move staged bag " + capture.staging_path.string() +
+        " to " + saved_path.string() + ": " + ec.message();
+      RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+    } else {
+      renameBagFileToMatchDirectory(saved_path);
+      if (success) {
+        message = saved_path.string();
+      } else {
+        RCLCPP_WARN(
+          get_logger(), "Capture ended early (%s); partial bag saved to %s",
+          message.c_str(), saved_path.string().c_str());
+      }
+    }
+  } else if (file_is_valid) {
     const std::filesystem::path target =
       success ? capture.final_path : partialPathFor(capture.final_path);
     const std::filesystem::path mcap = findMcapFile(capture.staging_path);

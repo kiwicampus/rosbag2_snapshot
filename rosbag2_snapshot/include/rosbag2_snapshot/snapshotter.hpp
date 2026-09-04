@@ -524,6 +524,8 @@ private:
     std::filesystem::path final_path;
     // req->profile, copied for use off the executor thread (event message).
     std::string profile;
+    // req->use_flat_output, copied for use off the executor thread.
+    bool flat_output{false};
   };
 
   // Iter through the message queue and write the messages to the bag

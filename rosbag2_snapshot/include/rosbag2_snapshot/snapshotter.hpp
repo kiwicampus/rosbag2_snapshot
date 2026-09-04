@@ -109,7 +109,9 @@ struct TopicDetails
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
   // In a forward capture, whether arrivals after the trigger are included.
-  bool forward = true;
+  // Named apart from "forward" (the capture-level post_duration_s mode)
+  // since this is a per-topic participation switch, not a mode switch.
+  bool include_post_trigger = true;
 
   TopicDetails() {}
 

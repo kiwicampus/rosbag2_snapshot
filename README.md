@@ -76,9 +76,11 @@ topics:
                                     # QoS adapted to what the topic's publishers actually offer,
                                     # the way `ros2 bag record` does) -- retried on a timer if
                                     # the publisher hasn't appeared yet.
-    forward: false                 # [Optional, default=true] In a forward capture, keep this
+    include_post_trigger: false     # [Optional, default=true] In a forward capture, keep this
                                     # topic's pre-trigger buffer but drop arrivals after the
-                                    # trigger. No effect outside a forward capture.
+                                    # trigger. No effect outside a forward capture. Named apart
+                                    # from "forward capture" (the post_duration_s mode below) --
+                                    # this is a per-topic participation switch, not a mode switch.
 ```
 
 A profile can also nest other profiles via `include`, which is how you get "multiple profiles at

@@ -26,8 +26,10 @@ struct ProfileTopicSpec
   double max_rate_hz = 0.0;
   // false = keep this topic's pre-trigger buffer in a forward capture, but
   // don't include what arrives after the trigger. true (default) records
-  // both. No effect outside a forward capture.
-  bool forward = true;
+  // both. No effect outside a forward capture. Named apart from "forward"
+  // (the capture-level post_duration_s mode) since this is a per-topic
+  // participation switch, not a mode switch.
+  bool include_post_trigger = true;
 };
 
 struct CaptureProfile

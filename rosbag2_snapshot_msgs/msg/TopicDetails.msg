@@ -13,4 +13,4 @@ string format ""            # The format to use for compression. Choices: jpg, p
 int32 jpg_quality -1        # The quality of the jpg compression. 0-100
 int32 png_compression -1    # The quality of the png compression. 0-9
 
-int8 forward -1             # (int-bool) In a forward capture, include arrivals after the trigger. -1 = inherit (default true)
+int8 include_post_trigger -1  # (int-bool) In a forward capture, include arrivals after the trigger. -1 = inherit (default true)

@@ -1324,11 +1324,11 @@ bool Snapshotter::writeTopic(
   if (!req->use_interval_mode) {
     // A forward capture normally writes everything buffered up to now,
     // including whatever arrived during the wait (req->stop_time left at
-    // 0). A topic with forward=false only gets its pre-trigger buffer:
-    // trim the upper bound at request_time (the moment the capture began)
-    // instead.
+    // 0). A topic with include_post_trigger=false only gets its pre-trigger
+    // buffer: trim the upper bound at request_time (the moment the capture
+    // began) instead.
     rclcpp::Time stop_time(req->stop_time);
-    if (isForwardCaptureRequest(req->post_duration_s) && !topic_details.forward) {
+    if (isForwardCaptureRequest(req->post_duration_s) && !topic_details.include_post_trigger) {
       stop_time = request_time;
     }
     range = message_queue.rangeFromTimes(req->start_time, stop_time, topic_details.old_messages_to_keep);
@@ -1739,7 +1739,7 @@ void Snapshotter::createBag(PendingCapture capture)
         DetailsMsg msg{};
         msg.name = spec.name;
         msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
-        msg.forward = spec.forward ? 1 : 0;
+        msg.include_post_trigger = spec.include_post_trigger ? 1 : 0;
         profile_topics.push_back(msg);
       }
     }
@@ -1969,7 +1969,7 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.override_old_timestamps != -1) details.override_old_timestamps = req_msg.override_old_timestamps;
   if (req_msg.queue_depth != -1) details.queue_depth = req_msg.queue_depth;
   if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
-  if (req_msg.forward != -1) details.forward = req_msg.forward;
+  if (req_msg.include_post_trigger != -1) details.include_post_trigger = req_msg.include_post_trigger;
 
   // Image compression
   if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;

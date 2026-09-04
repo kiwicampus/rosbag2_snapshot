@@ -31,6 +31,7 @@
 #include <rmw/rmw.h>
 #include <rosbag2_cpp/typesupport_helpers.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
+#include <rosbag2_snapshot/timestamp_override.hpp>
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
@@ -375,21 +376,24 @@ MessageQueue::range_t narrow_range_for_interval_single_msg(
 }  // namespace
 
 const rclcpp::Duration SnapshotterTopicOptions::NO_DURATION_LIMIT = rclcpp::Duration(-1s);
-const int32_t SnapshotterTopicOptions::NO_MEMORY_LIMIT = -1;
+const int64_t SnapshotterTopicOptions::NO_MEMORY_LIMIT = -1;
 const rclcpp::Duration SnapshotterTopicOptions::INHERIT_DURATION_LIMIT = rclcpp::Duration(0s);
-const int32_t SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT = 0;
+const int64_t SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT = 0;
+// uint32_t is enough to hold 1e6 itself; the multiply it's used in
+// (options_.default_memory_limit_ *= MB_TO_B, an int64_t) promotes this to
+// int64_t, so it doesn't reintroduce the overflow int64_t was widened to fix.
 static constexpr uint32_t MB_TO_B = 1e6;
 
 SnapshotterTopicOptions::SnapshotterTopicOptions(
   rclcpp::Duration duration_limit,
-  int32_t memory_limit)
+  int64_t memory_limit)
 : duration_limit_(duration_limit), memory_limit_(memory_limit)
 {
 }
 
 SnapshotterOptions::SnapshotterOptions(
   rclcpp::Duration default_duration_limit,
-  int32_t default_memory_limit)
+  int64_t default_memory_limit)
 : default_duration_limit_(default_duration_limit),
   default_memory_limit_(default_memory_limit),
   topics_()
@@ -399,7 +403,7 @@ SnapshotterOptions::SnapshotterOptions(
 bool SnapshotterOptions::addTopic(
   const TopicDetails & topic_details,
   rclcpp::Duration duration,
-  int32_t memory)
+  int64_t memory)
 {
   SnapshotterTopicOptions ops(duration, memory);
   std::pair<topics_t::iterator, bool> ret;
@@ -478,10 +482,9 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT &&
     size > options_.memory_limit_)
   {
-    static rclcpp::Clock clock;
-    RCLCPP_WARN_THROTTLE(logger_, clock, 5000,
-                         "Message size (%d bytes) from topic %s exceeds memory limit (%d bytes), dropping", 
-                         size, sub_->get_topic_name(), options_.memory_limit_);
+    RCLCPP_WARN(logger_,
+                "Message size (%d bytes) from topic %s exceeds memory limit (%ld bytes), dropping",
+                size, sub_->get_topic_name(), static_cast<long>(options_.memory_limit_));
     return false;
   }
 
@@ -643,11 +646,14 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 {
   // Created first (before subscribeProfileTopics(), which can itself
   // trigger a publishState() call via subscribeResolvedTopic()) so state_pub_
-  // is never null when publishState() runs. state_pub_ is transient_local so
-  // a late subscriber gets current state immediately without waiting for the
-  // next change.
+  // is never null when publishState() runs. Plain volatile QoS, not
+  // transient_local: this node is always run with intra-process communication
+  // enabled (see main.cpp), which only supports volatile durability -- a
+  // transient_local publisher fails to even construct in that mode. A late
+  // subscriber gets the current state on the next change instead of
+  // immediately.
   state_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotState>(
-    "snapshot_state", rclcpp::QoS(1).transient_local());
+    "snapshot_state", rclcpp::QoS(1));
   capture_event_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>(
     "snapshot_capture_event", rclcpp::QoS(10));
 
@@ -671,9 +677,12 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.img_compression_opts_ = pair.first.img_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
     details.h264_throttle_skip = pair.first.h264_throttle_skip;
-    std::pair<buffers_t::iterator, bool> res =
-      buffers_.emplace(details, queue);
-    assert(res.second);
+    {
+      std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
+      std::pair<buffers_t::iterator, bool> res =
+        buffers_.emplace(details, queue);
+      assert(res.second);
+    }
 
     subscribe(details, queue);
   }
@@ -707,13 +716,23 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 
 Snapshotter::~Snapshotter()
 {
-  // No explicit join here: capture_futures_ is the last-declared member of
-  // Snapshotter, so it is the first thing torn down once this destructor
-  // body returns, and every std::future in it (from std::async(launch::async,
-  // ...)) blocks in its own destructor until that capture finishes. That
-  // guarantees no capture thread is still running by the time state_lock_,
-  // buffers_ or the publishers above get destroyed, fixing the old
-  // detached-thread use-after-free on shutdown.
+  // Explicitly wait for every in-flight capture before touching buffers_ or
+  // any MessageQueue below. capture_futures_ being the last-declared member
+  // of Snapshotter (each std::future in it, from std::async(launch::async,
+  // ...), blocks in its own destructor until that capture finishes) only
+  // guarantees no capture thread is still running once this destructor BODY
+  // returns -- member destruction happens after the body, in reverse
+  // declaration order -- it says nothing about the body itself, which is
+  // exactly where the loop below runs. Without this explicit wait, a
+  // forward capture still mid-wait on its own thread could be iterating
+  // buffers_, or reading a queue's sub_, at the same time this loop resets
+  // it.
+  for (auto & f : capture_futures_) {
+    if (f.valid()) {
+      f.wait();
+    }
+  }
+  std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
   for (auto & buffer : buffers_) {
     buffer.second->sub_.reset();
   }
@@ -1197,6 +1216,13 @@ bool Snapshotter::writeTopic(
     range = narrow_range_for_interval_single_msg(
       range, topic_details, req->msg_timestamp, get_logger());
   }
+  // Loop-invariant: req->start_time/stop_time don't change per message, and
+  // shouldOverrideOldTimestamp() only depends on whether each was actually
+  // set, not on the current message.
+  const bool start_time_specified = builtin_time_nonzero(req->start_time);
+  const bool stop_time_specified = builtin_time_nonzero(req->stop_time);
+  const rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
+  bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -1220,11 +1246,16 @@ bool Snapshotter::writeTopic(
     prev_msg_time = msg_it->time.nanoseconds();
 
     bag_message->topic_name = tm.name;
-    rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
-    if((topic_details.override_old_timestamps || topic_details.old_messages_to_keep > 0) && (request_time - msg_it->time) > bag_duration)
+    if (shouldOverrideOldTimestamp(
+        topic_details.override_old_timestamps, topic_details.old_messages_to_keep,
+        start_time_specified, stop_time_specified,
+        (request_time - msg_it->time).nanoseconds(), bag_duration.nanoseconds()))
     {
       // Put old messages at the beginning of the bag
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
+      if (!logged_timestamp_override) {
+        RCLCPP_WARN(get_logger(), "Overriding old timestamps for topic %s", tm.name.c_str());
+        logged_timestamp_override = true;
+      }
       bag_message->time_stamp = rclcpp::Time(req->start_time).nanoseconds();
     }
     else
@@ -1418,7 +1449,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   if (!isForwardCaptureRequest(req->post_duration_s)) {
-    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
     for (const auto& buffer : buffers_) {
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
@@ -1489,7 +1520,7 @@ void Snapshotter::createBag(PendingCapture capture)
     // rangeFromTimes() already treats stop_time==0 as "no upper trim"
     // (unchanged), so writeTopic()'s unmodified call below naturally
     // picks up everything through this point.
-    std::shared_lock<std::shared_mutex> read_lock(state_lock_);
+    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
     for (const auto & buffer : buffers_) {
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
@@ -1598,29 +1629,45 @@ void Snapshotter::finalizeCapture(
   // Always attempt to close, even on a failed/canceled capture, so the
   // staging file left on disk is a well-formed, readable bag rather than
   // whatever state the Writer's destructor happens to leave it in.
+  bool file_is_valid = true;
   try {
     capture.bag_writer_ptr->close();
     RCLCPP_DEBUG(get_logger(), "Bag writer closed successfully");
   } catch (const std::exception & ex) {
+    file_is_valid = false;
     success = false;
     message = "Failed to close bag file: " + std::string(ex.what());
     RCLCPP_WARN(get_logger(), "%s", message.c_str());
   }
 
-  if (success) {
+  // Where the file actually ends up. Recorded data is never deleted just
+  // because a capture didn't fully complete -- a robot shutting down
+  // mid-recording is exactly this case -- so a canceled capture or a topic
+  // that failed to write is still saved, at a clearly distinct path from a
+  // full success (see partialPathFor()'s own comment for why). Only an
+  // actual close() failure leaves the file at its staging path, since its
+  // integrity can't be vouched for.
+  std::filesystem::path saved_path = capture.staging_path;
+  if (file_is_valid) {
+    saved_path = success ? capture.final_path : partialPathFor(capture.final_path);
     std::error_code ec;
-    std::filesystem::rename(capture.staging_path, capture.final_path, ec);
+    std::filesystem::rename(capture.staging_path, saved_path, ec);
     if (ec) {
       success = false;
+      saved_path = capture.staging_path;
       message = "Failed to move staged bag " + capture.staging_path.string() +
-        " to " + capture.final_path.string() + ": " + ec.message();
+        " to " + saved_path.string() + ": " + ec.message();
       RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+    } else if (success) {
+      message = saved_path.string();
     } else {
-      message = capture.final_path.string();
+      RCLCPP_WARN(
+        get_logger(), "Capture ended early (%s); partial bag saved to %s",
+        message.c_str(), saved_path.string().c_str());
     }
   } else {
     RCLCPP_WARN(
-      get_logger(), "Capture did not succeed; leaving partial bag at staging path %s",
+      get_logger(), "Bag writer failed to close cleanly; leaving file at staging path %s",
       capture.staging_path.string().c_str());
   }
 
@@ -1639,7 +1686,7 @@ void Snapshotter::finalizeCapture(
   }
 
   auto event = std::make_shared<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>();
-  event->filename = capture.final_path.string();
+  event->filename = saved_path.string();
   event->profile = capture.profile;
   event->success = success;
   event->message = message;
@@ -1663,7 +1710,10 @@ void Snapshotter::publishState()
     msg->last_capture_message = last_capture_message_;
     msg->last_capture_stamp = last_capture_stamp_;
   }
-  msg->buffered_topic_count = static_cast<uint32_t>(buffers_.size());
+  {
+    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
+    msg->buffered_topic_count = static_cast<uint32_t>(buffers_.size());
+  }
   state_pub_->publish(*msg);
 }
 
@@ -1702,6 +1752,7 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
 
 void Snapshotter::clear()
 {
+  std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
   for (const buffers_t::value_type & pair : buffers_) {
     // if oldest message is older than default_bag_duration, clear the queue
     // Kiwi Added this condition to avoid clearing the buffer constantly
@@ -1769,6 +1820,7 @@ void Snapshotter::enableCb(
 
 bool Snapshotter::isBuffered(const std::string & name) const
 {
+  std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
   for (const auto & buf : buffers_) {
     if (buf.first.name == name) {
       return true;
@@ -1807,9 +1859,12 @@ void Snapshotter::pollTopics()
       fixTopicOptions(topic_options);
       auto queue = std::make_shared<MessageQueue>(topic_options, get_logger());
 
-      std::pair<buffers_t::iterator,
-        bool> res = buffers_.emplace(details, queue);
-      assert(res.second);
+      {
+        std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
+        std::pair<buffers_t::iterator,
+          bool> res = buffers_.emplace(details, queue);
+        assert(res.second);
+      }
       subscribe(details, queue);
     }
   }
@@ -1853,7 +1908,10 @@ bool Snapshotter::subscribeResolvedTopic(
   SnapshotterTopicOptions topic_options;
   fixTopicOptions(topic_options);
   auto queue = std::make_shared<MessageQueue>(topic_options, get_logger());
-  buffers_.emplace(details, queue);
+  {
+    std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
+    buffers_.emplace(details, queue);
+  }
   subscribe(details, queue);
   RCLCPP_INFO(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
   if (state_pub_) {

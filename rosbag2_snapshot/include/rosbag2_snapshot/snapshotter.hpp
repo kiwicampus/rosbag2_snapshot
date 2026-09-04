@@ -157,23 +157,26 @@ struct SnapshotterTopicOptions
   static const rclcpp::Duration NO_DURATION_LIMIT;
   // When the value of memory_limit_, do not trunctate the buffer
   // no matter how much memory it consumes (DANGROUS)
-  static const int32_t NO_MEMORY_LIMIT;
+  static const int64_t NO_MEMORY_LIMIT;
   // When the value of duration_limit_, inherit the limit from
   // the node's configured default
   static const rclcpp::Duration INHERIT_DURATION_LIMIT;
   // When the value of memory_limit_, inherit the limit from
   // the node's configured default
-  static const int32_t INHERIT_MEMORY_LIMIT;
+  static const int64_t INHERIT_MEMORY_LIMIT;
 
   // Maximum difference in time from newest and oldest message in
   // buffer before older messages are removed
   rclcpp::Duration duration_limit_;
-  // Maximum memory usage of the buffer before older messages are removed
-  int32_t memory_limit_;
+  // Maximum memory usage of the buffer before older messages are removed.
+  // int64_t (not int32_t): this is a byte count, and default_memory_limit is
+  // configured in MB then multiplied by 1e6 -- a config value of a couple
+  // GB would overflow a 32-bit count.
+  int64_t memory_limit_;
 
   SnapshotterTopicOptions(
     rclcpp::Duration duration_limit = INHERIT_DURATION_LIMIT,
-    int32_t memory_limit = INHERIT_MEMORY_LIMIT);
+    int64_t memory_limit = INHERIT_MEMORY_LIMIT);
 };
 
 /* Configuration for the Snapshotter node. Contains default limits for memory and duration
@@ -183,8 +186,9 @@ struct SnapshotterOptions
 {
   // Duration limit to use for a topic's buffer if one is not specified
   rclcpp::Duration default_duration_limit_;
-  // Memory limit to use for a topic's buffer if one is not specified
-  int32_t default_memory_limit_;
+  // Memory limit to use for a topic's buffer if one is not specified, in
+  // bytes. int64_t: see the comment on SnapshotterTopicOptions::memory_limit_.
+  int64_t default_memory_limit_;
   // Upper bound on a goal's post_duration_s (forward/live capture window).
   // <= 0 disables forward captures entirely, not "unlimited" -- see
   // forward_capture.hpp's forwardCaptureWithinLimit().
@@ -209,13 +213,13 @@ struct SnapshotterOptions
 
   SnapshotterOptions(
     rclcpp::Duration default_duration_limit = rclcpp::Duration(30s),
-    int32_t default_memory_limit = -1);
+    int64_t default_memory_limit = -1);
 
   // Add a new topic to the configuration, returns false if the topic was already present
   bool addTopic(
     const TopicDetails & topic_details,
     rclcpp::Duration duration_limit = SnapshotterTopicOptions::INHERIT_DURATION_LIMIT,
-    int32_t memory_limit = SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT);
+    int64_t memory_limit = SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT);
 };
 
 /* Stores a buffered message of an ambiguous type and it's associated metadata (time of arrival),
@@ -309,6 +313,20 @@ private:
   SnapshotterOptions options_;
   typedef std::map<TopicDetails, std::shared_ptr<MessageQueue>> buffers_t;
   buffers_t buffers_;
+  // Protects buffers_ (the map itself: iteration, emplace, size()) only.
+  // Kept separate from state_lock_ below rather than folded into it, since
+  // state_lock_'s own scope is deliberately narrower (see its comment) and
+  // conflating the two would risk a lock-ordering mistake. A capture's
+  // worker task (std::async, off the executor thread -- see
+  // capture_futures_ below) can read buffers_ while a forward capture is
+  // waiting out its post_duration_s, at the same time the 1Hz
+  // poll_topic_timer_ on the executor thread inserts newly-discovered
+  // topics into it; each MessageQueue reached through buffers_ has its own
+  // separate internal lock (see MessageQueue::lock) once obtained, so this
+  // mutex's critical sections should cover only the direct map access
+  // itself, never a nested call into another method that also takes it --
+  // std::shared_mutex is not reentrant.
+  mutable std::shared_mutex buffers_lock_;
   // Locks recording_, active_capture_count_, active_filenames_ and
   // last_capture_* below.
   std::shared_mutex state_lock_;

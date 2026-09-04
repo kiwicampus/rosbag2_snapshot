@@ -31,3 +31,31 @@ TEST(StagingPath, IsStableForTheSameInput)
   std::filesystem::path final_path = "/tmp/foo.bag";
   EXPECT_EQ(rosbag2_snapshot::stagingPathFor(final_path), rosbag2_snapshot::stagingPathFor(final_path));
 }
+
+TEST(PartialPath, AppendsAPartialSuffix)
+{
+  EXPECT_EQ(
+    rosbag2_snapshot::partialPathFor("/tmp/foo.bag").string(),
+    "/tmp/foo.bag.partial");
+}
+
+TEST(PartialPath, StaysInTheSameDirectoryAsTheFinalPath)
+{
+  std::filesystem::path final_path = "/tmp/some/nested/dir/event.bag";
+  std::filesystem::path partial_path = rosbag2_snapshot::partialPathFor(final_path);
+  EXPECT_EQ(partial_path.parent_path(), final_path.parent_path());
+}
+
+TEST(PartialPath, IsDifferentFromTheStagingPath)
+{
+  std::filesystem::path final_path = "/tmp/foo.bag";
+  EXPECT_NE(
+    rosbag2_snapshot::partialPathFor(final_path),
+    rosbag2_snapshot::stagingPathFor(final_path));
+}
+
+TEST(PartialPath, IsDifferentFromTheFinalPath)
+{
+  std::filesystem::path final_path = "/tmp/foo.bag";
+  EXPECT_NE(rosbag2_snapshot::partialPathFor(final_path), final_path);
+}

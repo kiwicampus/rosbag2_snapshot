@@ -145,6 +145,12 @@ if(BUILD_TESTING)
     test/test_forward_capture.cpp
   )
   target_include_directories(test_forward_capture PRIVATE include)
+
+  # Pure/ROS-free, exercises only timestamp_override.hpp.
+  ament_add_gtest(test_timestamp_override
+    test/test_timestamp_override.cpp
+  )
+  target_include_directories(test_timestamp_override PRIVATE include)
 endif()
 
 ament_package()

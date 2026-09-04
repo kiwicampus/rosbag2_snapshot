@@ -26,43 +26,47 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef ROSBAG2_SNAPSHOT__STAGING_PATH_HPP_
-#define ROSBAG2_SNAPSHOT__STAGING_PATH_HPP_
+#ifndef ROSBAG2_SNAPSHOT__TIMESTAMP_OVERRIDE_HPP_
+#define ROSBAG2_SNAPSHOT__TIMESTAMP_OVERRIDE_HPP_
 
-#include <filesystem>
+#include <cstdint>
 
 namespace rosbag2_snapshot
 {
 
-// Staging path for a bag's atomic write: same directory/filesystem as
-// final_path (so the rename in Snapshotter::finalizeCapture() is atomic,
-// never a fallback copy), just suffixed. Deliberately kept in its own
-// ROS-free header (no rclcpp/OpenCV/etc.) so it's unit-testable with plain
-// gtest -- see test/test_staging_path.cpp.
-inline std::filesystem::path stagingPathFor(const std::filesystem::path & final_path)
+// True if a buffered message's own timestamp should be replaced with the
+// request's start_time when writing it into a bag, rather than keeping the
+// time it actually arrived. Deliberately kept in its own ROS-free header (no
+// rclcpp/builtin_interfaces/etc.) so it's unit-testable with plain gtest --
+// see test/test_timestamp_override.cpp -- same pattern as
+// forward_capture.hpp and staging_path.hpp.
+//
+// Only true when both:
+//  - the topic opted in (override_old_timestamps, or old_messages_to_keep
+//    greater than zero), and
+//  - the request actually specifies a real time window, i.e. start_time or
+//    stop_time is set. A request that leaves both at their zero default asks
+//    for "everything currently buffered" -- there is no window to be
+//    "outside of" in that case, so every message keeps its own timestamp
+//    regardless of the topic's settings. Every forward (live) capture leaves
+//    both at zero, and so does any request that doesn't set them.
+inline bool shouldOverrideOldTimestamp(
+  bool override_old_timestamps,
+  int old_messages_to_keep,
+  bool start_time_specified,
+  bool stop_time_specified,
+  int64_t message_age_ns,
+  int64_t bag_duration_ns)
 {
-  std::filesystem::path staging_path = final_path;
-  staging_path += ".tmp";
-  return staging_path;
-}
-
-// Where a capture is saved if it didn't fully complete (canceled, or a topic
-// failed to write) but the bag writer still closed the file cleanly. Always
-// distinct from final_path: this package doesn't assume anything about how
-// a deployment's own tooling picks up finished bags, so a partial capture is
-// never placed at the exact path a full success would use, only ever found
-// by something that explicitly knows to look for it -- see the
-// "Concurrent captures & atomic writes" section of the README. Deliberately
-// kept in this same ROS-free header, alongside stagingPathFor(), for the
-// same reason: unit-testable with plain gtest -- see
-// test/test_staging_path.cpp.
-inline std::filesystem::path partialPathFor(const std::filesystem::path & final_path)
-{
-  std::filesystem::path partial_path = final_path;
-  partial_path += ".partial";
-  return partial_path;
+  if (!(override_old_timestamps || old_messages_to_keep > 0)) {
+    return false;
+  }
+  if (!start_time_specified && !stop_time_specified) {
+    return false;
+  }
+  return message_age_ns > bag_duration_ns;
 }
 
 }  // namespace rosbag2_snapshot
 
-#endif  // ROSBAG2_SNAPSHOT__STAGING_PATH_HPP_
+#endif  // ROSBAG2_SNAPSHOT__TIMESTAMP_OVERRIDE_HPP_

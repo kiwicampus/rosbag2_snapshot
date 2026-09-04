@@ -42,9 +42,17 @@ Buffer recent messages until triggered to write or trigger an already running in
       /topic3:
         type: "sensor_msgs/msg/Image"
         duration: 2.0                      # [Optional] Override both limits
-        memory: -1                         # Negative value means no limit
+        memory: -1                         # Override memory limit, in bytes (default_memory_limit
+                                            # above is in MB). Negative value means no limit
     capture_profiles_dir: "/path/to/profiles"  # [Optional] See "Capture profiles" below
 ```
+
+### Old timestamps
+
+The `override_old_timestamps` and `old_messages_to_keep` topic settings only change anything
+when a request sets a real start time or stop time. If both are left at zero — the default,
+meaning "save everything currently buffered" — every message keeps its own real timestamp, no
+matter how these settings are configured.
 
 ### Capture profiles
 
@@ -115,12 +123,21 @@ second goal for a filename that's *already* being written, since two captures op
 output file concurrently would corrupt each other's output; it's rejected at goal-acceptance
 time with a clear message, and freed up again as soon as the first capture finishes.
 
-Every capture is written to a staging path in the same directory as the requested filename
-(`<filename>.tmp`) and atomically renamed into place only once the write succeeds -- a crash or
-`kill -9` mid-write leaves only the `.tmp` file behind, never a corrupt file at the real path. A
-leftover `.tmp` from a previous crash is reclaimed the next time that exact filename is
-requested again (there's no startup sweep, since this package has no "storage root" concept to
-bound one to).
+Every capture is first written to a temporary file next to the requested filename, then moved
+into place once writing is done. This keeps a half-written file from ever appearing at the name
+you asked for.
+
+If a capture is canceled, or a topic fails to write partway through, the bag is still saved — it
+is never deleted — but at `<filename>.partial` rather than at the requested filename itself. This
+way a partial recording is never mistaken for a complete one just because a file exists at the
+expected name. Whether a capture fully completed is always given by the `success` field on the
+action result, and by the matching `snapshot_capture_event` message (see "Status &
+capture-event topics" below) — anything that automatically picks up saved bags should check that
+field rather than assume a file on disk means the recording finished.
+
+A file only stays under its temporary name if the writer itself could not close it cleanly,
+which should be rare. That file is never deleted either, and is replaced the next time that
+exact same filename is requested again.
 
 ### Forward (live) captures
 
@@ -151,8 +168,7 @@ its default `0.0`) is completely unaffected either way.
 Two additional topics report on the node's own state, independent of the per-request
 action feedback/result:
 
-- **`snapshot_state`** (`rosbag2_snapshot_msgs/msg/SnapshotState`, transient-local, so a late
-  subscriber gets the current value immediately): `recording`, `active_capture_count`,
+- **`snapshot_state`** (`rosbag2_snapshot_msgs/msg/SnapshotState`): `recording`, `active_capture_count`,
   `buffered_topic_count`, and the outcome of the most recently *finished* capture of any
   filename (`has_last_capture`, `last_capture_success`, `last_capture_message`,
   `last_capture_stamp`). Published on every state change (goal accepted/rejected, capture
@@ -170,19 +186,19 @@ served directly by the `snapshotter` node under its own namespace.
 ###### Trigger a snapshot of all buffered topics
 
 ```
-$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: ''}"
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: 'snapshot.bag'}"
 ```
 
 ###### Trigger a snapshot of selected topics via a named capture profile
 
 ```
-$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '', profile: 'sensors'}"
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: 'snapshot.bag', profile: 'sensors'}"
 ```
 
 ###### Trigger a forward (live) capture that also includes the next 5 seconds
 
 ```
-$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '', post_duration_s: 5.0}" --feedback
+$ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: 'snapshot.bag', post_duration_s: 5.0}" --feedback
 ```
 
 ###### Pause/resume buffering manually (this one really is a service)

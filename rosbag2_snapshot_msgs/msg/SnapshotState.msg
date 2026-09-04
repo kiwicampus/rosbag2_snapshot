@@ -5,3 +5,5 @@ bool has_last_capture
 bool last_capture_success
 string last_capture_message
 builtin_interfaces/Time last_capture_stamp
+string[] buffered_topics
+float32 buffered_window_s      # Longest oldest->newest span across every buffered topic

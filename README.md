@@ -23,6 +23,7 @@ Buffer recent messages until triggered to write or trigger an already running in
   ros__parameters:
     default_duration_limit: 10.0           # [Optional, default=-1] Maximum time difference between newest and oldest message in seconds
     default_memory_limit: 64.0             # [Optional, default=-1] Maximum memory used by messages in each topic's buffer, in MB
+    total_memory_limit: 256.0              # [Optional, default=0] Shared cap across every topic's buffer combined, in MB. 0 = no shared cap (default).
     max_post_duration_s: 300.0             # [Optional, default=300] Upper bound on a goal's post_duration_s
                                             # (forward/live capture window), in seconds. <= 0 disables forward
                                             # captures entirely. See "Forward (live) captures" below.
@@ -75,6 +76,9 @@ topics:
                                     # QoS adapted to what the topic's publishers actually offer,
                                     # the way `ros2 bag record` does) -- retried on a timer if
                                     # the publisher hasn't appeared yet.
+    forward: false                 # [Optional, default=true] In a forward capture, keep this
+                                    # topic's pre-trigger buffer but drop arrivals after the
+                                    # trigger. No effect outside a forward capture.
 ```
 
 A profile can also nest other profiles via `include`, which is how you get "multiple profiles at

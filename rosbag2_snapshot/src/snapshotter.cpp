@@ -32,8 +32,10 @@
 #include <rosbag2_cpp/typesupport_helpers.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
 #include <rosbag2_snapshot/timestamp_override.hpp>
+#include <rosbag2_transport/qos.hpp>
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include <filesystem>
 
@@ -96,6 +98,30 @@ bool builtin_time_nonzero(const builtin_interfaces::msg::Time & t)
 bool builtin_time_equal(const builtin_interfaces::msg::Time & a, const builtin_interfaces::msg::Time & b)
 {
   return a.sec == b.sec && a.nanosec == b.nanosec;
+}
+
+// rosbag2 stores offered_qos_profiles as a YAML sequence of QoS profiles.
+std::string encodeQos(const rclcpp::QoS & qos)
+{
+  YAML::Node sequence;
+  sequence.push_back(
+    YAML::convert<rosbag2_transport::Rosbag2QoS>::encode(rosbag2_transport::Rosbag2QoS(qos)));
+  std::ostringstream out;
+  out << sequence;
+  return out.str();
+}
+
+// Writer::open() always produces a directory (<uri>/<uri>_0.mcap plus a
+// metadata.yaml); only the .mcap is useful standalone.
+std::filesystem::path findMcapFile(const std::filesystem::path & directory)
+{
+  std::error_code ec;
+  for (std::filesystem::recursive_directory_iterator it(directory, ec), end; it != end; ++it) {
+    if (it->is_regular_file(ec) && it->path().extension() == ".mcap") {
+      return it->path();
+    }
+  }
+  return {};
 }
 
 namespace introspection = rosidl_typesupport_introspection_cpp;
@@ -417,8 +443,10 @@ SnapshotMessage::SnapshotMessage(
 {
 }
 
-MessageQueue::MessageQueue(const SnapshotterTopicOptions & options, const rclcpp::Logger & logger)
-: options_(options), logger_(logger), size_(0)
+MessageQueue::MessageQueue(
+  const SnapshotterTopicOptions & options, const rclcpp::Logger & logger,
+  SharedMemoryBudget * shared_budget)
+: options_(options), logger_(logger), size_(0), shared_budget_(shared_budget)
 {
 }
 
@@ -470,7 +498,7 @@ rclcpp::Duration MessageQueue::duration() const
   return queue_.back().time - queue_.front().time;
 }
 
-bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
+MessageQueuePushResult MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
 {
   // If new message is older than back of queue, time has gone backwards and buffer must be cleared
   if (!queue_.empty() && time < queue_.back().time) {
@@ -485,7 +513,7 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
     RCLCPP_WARN(logger_,
                 "Message size (%d bytes) from topic %s exceeds memory limit (%ld bytes), dropping",
                 size, sub_->get_topic_name(), static_cast<long>(options_.memory_limit_));
-    return false;
+    return MessageQueuePushResult::DROPPED_TOO_LARGE;
   }
 
   // If memory limit is enforced, remove elements from front of queue until limit
@@ -510,7 +538,14 @@ bool MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
       dt = time - queue_.front().time;
     }
   }
-  return true;
+
+  // Checked last, once this queue has trimmed itself as far as its own
+  // limits allow. If it still doesn't fit, the caller evicts elsewhere.
+  if (shared_budget_ != nullptr && !shared_budget_->fits(size)) {
+    return MessageQueuePushResult::BUDGET_FULL;
+  }
+
+  return MessageQueuePushResult::STORED;
 }
 bool MessageQueue::refreshBuffer(rclcpp::Time const& time)
 {
@@ -529,10 +564,10 @@ bool MessageQueue::refreshBuffer(rclcpp::Time const& time)
   }
   return true;
 }
-void MessageQueue::push(SnapshotMessage const& _out)
+MessageQueuePushResult MessageQueue::push(SnapshotMessage const& _out)
 {
   std::lock_guard<std::mutex> l(lock);
-  _push(_out);
+  return _push(_out);
 }
 
 SnapshotMessage MessageQueue::pop()
@@ -553,16 +588,21 @@ int64_t MessageQueue::getMessageSize(SnapshotMessage const & snapshot_msg) const
   return message_size + metadata_size + deque_overhead + shared_ptr_overhead;
 }
 
-void MessageQueue::_push(SnapshotMessage const & _out)
+MessageQueuePushResult MessageQueue::_push(SnapshotMessage const & _out)
 {
   int32_t size = _out.msg->size();
-  // If message cannot be added without violating limits, it must be dropped
-  if (!preparePush(size, _out.time)) {
-    return;
+  MessageQueuePushResult result = preparePush(size, _out.time);
+  if (result != MessageQueuePushResult::STORED) {
+    return result;
   }
   queue_.push_back(_out);
   // Add size of new message to running count to maintain correctness
-  size_ += getMessageSize(_out);
+  const int64_t added = getMessageSize(_out);
+  size_ += added;
+  if (shared_budget_ != nullptr) {
+    shared_budget_->add(added);
+  }
+  return MessageQueuePushResult::STORED;
 }
 
 SnapshotMessage MessageQueue::_pop()
@@ -570,8 +610,22 @@ SnapshotMessage MessageQueue::_pop()
   SnapshotMessage tmp = queue_.front();
   queue_.pop_front();
   //  Remove size of popped message to maintain correctness of size_
-  size_ -= getMessageSize(tmp);
+  const int64_t freed = getMessageSize(tmp);
+  size_ -= freed;
+  if (shared_budget_ != nullptr) {
+    shared_budget_->release(freed);
+  }
   return tmp;
+}
+
+bool MessageQueue::popOldest()
+{
+  std::lock_guard<std::mutex> l(lock);
+  if (queue_.empty()) {
+    return false;
+  }
+  _pop();
+  return true;
 }
 
 MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time const & stop, int old_messages_to_keep)
@@ -658,13 +712,14 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     "snapshot_capture_event", rclcpp::QoS(10));
 
   parseOptionsFromParams();
+  total_memory_budget_.setLimit(options_.total_memory_limit_);
 
   // Create the queue for each topic and set up the subscriber to add to it on new messages
   for (auto & pair : options_.topics_) {
     string topic{pair.first.name}, type{pair.first.type};
     fixTopicOptions(pair.second);
     shared_ptr<MessageQueue> queue;
-    queue.reset(new MessageQueue(pair.second, get_logger()));
+    queue.reset(new MessageQueue(pair.second, get_logger(), &total_memory_budget_));
 
     TopicDetails details{};
     details.name = topic;
@@ -846,6 +901,18 @@ void Snapshotter::parseOptionsFromParams()
   // Convert memory limit in MB to B
   if (options_.default_memory_limit_ != -1.0) {
     options_.default_memory_limit_ *= MB_TO_B;
+  }
+
+  try {
+    // 0 = no shared cap across topics (default; keeps existing behavior).
+    options_.total_memory_limit_ =
+      static_cast<int64_t>(declare_parameter<double>("total_memory_limit", 0.0));
+  } catch (const rclcpp::ParameterTypeException & ex) {
+    RCLCPP_ERROR(get_logger(), "total_memory_limit is of incorrect type.");
+    throw ex;
+  }
+  if (options_.total_memory_limit_ > 0) {
+    options_.total_memory_limit_ *= MB_TO_B;
   }
 
   try {
@@ -1132,7 +1199,36 @@ void Snapshotter::topicCb(
   }
   // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
-  queue->push(out);
+  if (queue->push(out) == MessageQueuePushResult::BUDGET_FULL) {
+    evictFromLargestBuffer(static_cast<int64_t>(msg->size()));
+    queue->push(out);
+  }
+}
+
+void Snapshotter::evictFromLargestBuffer(int64_t bytes)
+{
+  std::vector<std::shared_ptr<MessageQueue>> queues;
+  {
+    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
+    queues.reserve(buffers_.size());
+    for (const auto & entry : buffers_) {
+      queues.push_back(entry.second);
+    }
+  }
+  while (!total_memory_budget_.fits(bytes)) {
+    std::shared_ptr<MessageQueue> largest;
+    int64_t largest_bytes = 0;
+    for (const auto & candidate : queues) {
+      const int64_t used = candidate->usedBytes();
+      if (used > largest_bytes) {
+        largest_bytes = used;
+        largest = candidate;
+      }
+    }
+    if (largest == nullptr || !largest->popOldest()) {
+      return;
+    }
+  }
 }
 
 void Snapshotter::subscribe(
@@ -1166,15 +1262,27 @@ bool Snapshotter::writeTopic(
 {
   auto req = goal_handle->get_goal();
   MessageQueue::range_t range;
-  if (!req->use_interval_mode)
-    range = message_queue.rangeFromTimes(req->start_time, req->stop_time, topic_details.old_messages_to_keep);
-  else
+  if (!req->use_interval_mode) {
+    // A forward capture normally writes everything buffered up to now,
+    // including whatever arrived during the wait (req->stop_time left at
+    // 0). A topic with forward=false only gets its pre-trigger buffer:
+    // trim the upper bound at request_time (the moment the capture began)
+    // instead.
+    rclcpp::Time stop_time(req->stop_time);
+    if (isForwardCaptureRequest(req->post_duration_s) && !topic_details.forward) {
+      stop_time = request_time;
+    }
+    range = message_queue.rangeFromTimes(req->start_time, stop_time, topic_details.old_messages_to_keep);
+  } else {
     range = message_queue.intervalFromTimesMsg(req->msg_timestamp, req->interval_mode_tolerance);
+  }
 
   rosbag2_storage::TopicMetadata tm;
   tm.name = topic_details.name;
   tm.type = topic_details.type;
   tm.serialization_format = "cdr";
+  // Replay needs the QoS the messages were actually recorded under.
+  tm.offered_qos_profiles = encodeQos(topic_details.qos);
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
   cv_bridge::CvImagePtr cv_bridge_img;
@@ -1196,7 +1304,16 @@ bool Snapshotter::writeTopic(
     img_serializer = rclcpp::Serialization<sensor_msgs::msg::Image>();
   }
 
-  bag_writer.create_topic(tm);
+  // The two-arg form embeds the schema, so a bare .mcap is readable on its
+  // own; fall back to undeclared-schema rather than fail the whole capture.
+  try {
+    bag_writer.create_topic(tm, definitions_.get_full_text(tm.type));
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(
+      get_logger(), "no message definition for %s (%s): %s -- the bag will carry no schema for it",
+      tm.name.c_str(), tm.type.c_str(), e.what());
+    bag_writer.create_topic(tm);
+  }
 
   double prev_msg_time = 0.0;
   auto start = std::chrono::high_resolution_clock::now();
@@ -1541,6 +1658,7 @@ void Snapshotter::createBag(PendingCapture capture)
         DetailsMsg msg{};
         msg.name = spec.name;
         msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
+        msg.forward = spec.forward ? 1 : 0;
         profile_topics.push_back(msg);
       }
     }
@@ -1649,21 +1767,35 @@ void Snapshotter::finalizeCapture(
   // integrity can't be vouched for.
   std::filesystem::path saved_path = capture.staging_path;
   if (file_is_valid) {
-    saved_path = success ? capture.final_path : partialPathFor(capture.final_path);
-    std::error_code ec;
-    std::filesystem::rename(capture.staging_path, saved_path, ec);
-    if (ec) {
+    const std::filesystem::path target =
+      success ? capture.final_path : partialPathFor(capture.final_path);
+    const std::filesystem::path mcap = findMcapFile(capture.staging_path);
+    if (mcap.empty()) {
       success = false;
-      saved_path = capture.staging_path;
-      message = "Failed to move staged bag " + capture.staging_path.string() +
-        " to " + saved_path.string() + ": " + ec.message();
+      message = "the writer produced no .mcap under " + capture.staging_path.string();
       RCLCPP_ERROR(get_logger(), "%s", message.c_str());
-    } else if (success) {
-      message = saved_path.string();
     } else {
-      RCLCPP_WARN(
-        get_logger(), "Capture ended early (%s); partial bag saved to %s",
-        message.c_str(), saved_path.string().c_str());
+      std::error_code ec;
+      std::filesystem::rename(mcap, target, ec);
+      if (ec) {
+        success = false;
+        message = "Failed to move staged bag " + mcap.string() +
+          " to " + target.string() + ": " + ec.message();
+        RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+      } else {
+        saved_path = target;
+        // The rest of the staging directory (metadata.yaml) is no longer
+        // needed once the .mcap has been extracted from it.
+        std::error_code cleanup_ec;
+        std::filesystem::remove_all(capture.staging_path, cleanup_ec);
+        if (success) {
+          message = saved_path.string();
+        } else {
+          RCLCPP_WARN(
+            get_logger(), "Capture ended early (%s); partial bag saved to %s",
+            message.c_str(), saved_path.string().c_str());
+        }
+      }
     }
   } else {
     RCLCPP_WARN(
@@ -1713,6 +1845,13 @@ void Snapshotter::publishState()
   {
     std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
     msg->buffered_topic_count = static_cast<uint32_t>(buffers_.size());
+    msg->buffered_topics.reserve(buffers_.size());
+    double window_s = 0.0;
+    for (const auto & buffer : buffers_) {
+      msg->buffered_topics.push_back(buffer.first.name);
+      window_s = std::max(window_s, buffer.second->duration().seconds());
+    }
+    msg->buffered_window_s = static_cast<float>(window_s);
   }
   state_pub_->publish(*msg);
 }
@@ -1725,6 +1864,7 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.override_old_timestamps != -1) details.override_old_timestamps = req_msg.override_old_timestamps;
   if (req_msg.queue_depth != -1) details.queue_depth = req_msg.queue_depth;
   if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
+  if (req_msg.forward != -1) details.forward = req_msg.forward;
 
   // Image compression
   if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;
@@ -1857,7 +1997,7 @@ void Snapshotter::pollTopics()
     if (options_.addTopic(details)) {
       SnapshotterTopicOptions topic_options;
       fixTopicOptions(topic_options);
-      auto queue = std::make_shared<MessageQueue>(topic_options, get_logger());
+      auto queue = std::make_shared<MessageQueue>(topic_options, get_logger(), &total_memory_budget_);
 
       {
         std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
@@ -1907,7 +2047,7 @@ bool Snapshotter::subscribeResolvedTopic(
 
   SnapshotterTopicOptions topic_options;
   fixTopicOptions(topic_options);
-  auto queue = std::make_shared<MessageQueue>(topic_options, get_logger());
+  auto queue = std::make_shared<MessageQueue>(topic_options, get_logger(), &total_memory_budget_);
   {
     std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
     buffers_.emplace(details, queue);

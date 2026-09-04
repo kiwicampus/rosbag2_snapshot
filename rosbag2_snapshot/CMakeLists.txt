@@ -151,6 +151,12 @@ if(BUILD_TESTING)
     test/test_timestamp_override.cpp
   )
   target_include_directories(test_timestamp_override PRIVATE include)
+
+  # Pure/ROS-free, exercises only shared_memory_budget.hpp.
+  ament_add_gtest(test_shared_memory_budget
+    test/test_shared_memory_budget.cpp
+  )
+  target_include_directories(test_shared_memory_budget PRIVATE include)
 endif()
 
 ament_package()

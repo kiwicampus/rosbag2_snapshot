@@ -37,6 +37,7 @@
 #include <rosbag2_snapshot_msgs/msg/snapshot_capture_event.hpp>
 #include <rosbag2_snapshot_msgs/action/trigger_snapshot.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <rosbag2_cpp/message_definitions/local_message_definition_source.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_compression/sequential_compression_writer.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -62,6 +63,7 @@
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/forward_capture.hpp"
+#include "rosbag2_snapshot/shared_memory_budget.hpp"
 #include "rosbag2_snapshot/staging_path.hpp"
 #include "rosbag2_snapshot/topic_resolver.hpp"
 
@@ -99,6 +101,8 @@ struct TopicDetails
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
+  // In a forward capture, whether arrivals after the trigger are included.
+  bool forward = true;
 
   TopicDetails() {}
 
@@ -206,6 +210,11 @@ struct SnapshotterOptions
   // Optional; "" means no profiles are configured and only the static topics_
   // list below exists, exactly as before this feature.
   std::string capture_profiles_dir_;
+  // Total bytes every topic's queue may hold combined, on top of each
+  // topic's own memory_limit_. <= 0 (the default) means no shared cap.
+  // Set via the total_memory_limit param (MB), converted to bytes like
+  // default_memory_limit_.
+  int64_t total_memory_limit_{0};
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
   // Provides list of topics to snapshot and their limit configurations
@@ -235,6 +244,22 @@ struct SnapshotMessage
   rclcpp::Time time;
 };
 
+// Outcome of trying to add a message to a MessageQueue.
+enum class MessageQueuePushResult
+{
+  // Stored (any eviction needed to make room already happened).
+  STORED,
+  // The message alone is bigger than the topic's own memory_limit_; refused
+  // rather than emptying the whole queue for it. Unchanged from the
+  // pre-existing "cannot be added" behavior.
+  DROPPED_TOO_LARGE,
+  // This queue's own limits are satisfied, but the shared budget still
+  // doesn't fit even after trimming. Caller should evict from the largest
+  // queue and retry -- see evictFromLargestBuffer(). Never returned when
+  // shared_budget_ is null.
+  BUDGET_FULL,
+};
+
 /* Stores a queue of buffered messages for a single topic ensuring
  * that the duration and memory limits are respected by truncating
  * as needed on push() operations.
@@ -256,12 +281,16 @@ private:
   queue_t queue_;
   // Subscriber to the callback which uses this queue
   std::shared_ptr<rclcpp::GenericSubscription> sub_;
+  // Not owned; null for a clone() (never pushed to).
+  SharedMemoryBudget * shared_budget_{nullptr};
 
 public:
-  explicit MessageQueue(const SnapshotterTopicOptions & options, const rclcpp::Logger & logger);
+  explicit MessageQueue(
+    const SnapshotterTopicOptions & options, const rclcpp::Logger & logger,
+    SharedMemoryBudget * shared_budget = nullptr);
   // Add a new message to the internal queue if possible, truncating the front
   // of the queue as needed to enforce limits
-  void push(const SnapshotMessage & msg);
+  MessageQueuePushResult push(const SnapshotMessage & msg);
   // Removes the message at the front of the queue (oldest) and returns it
   SnapshotMessage pop();
   // Returns the time difference between back and front of queue, or 0 if size <= 1
@@ -283,17 +312,25 @@ public:
   bool refreshBuffer(rclcpp::Time const& time);
   // Method to clone the current queue and its state
   std::shared_ptr<MessageQueue> clone();
+  // Bytes currently held, for cross-queue eviction comparisons.
+  int64_t usedBytes() const
+  {
+    std::lock_guard<std::mutex> l(lock);
+    return size_;
+  }
+  // Drops the single oldest message. False if already empty.
+  bool popOldest();
 
 private:
   // Internal push whitch does not obtain lock
-  void _push(SnapshotMessage const & msg);
+  MessageQueuePushResult _push(SnapshotMessage const & msg);
   // Internal pop which does not obtain lock
   SnapshotMessage _pop();
   // Internal clear which does not obtain lock
   void _clear();
   // Truncate front of queue as needed to fit a new message of specified size and time.
-  // Returns False if this is impossible.
-  bool preparePush(int32_t size, rclcpp::Time const & time);
+  // Returns the same tri-state _push()/push() do.
+  MessageQueuePushResult preparePush(int32_t size, rclcpp::Time const & time);
 };
 
 // Snapshotter node. Maintains a circular buffer of the most recent messages
@@ -327,6 +364,8 @@ private:
   // itself, never a nested call into another method that also takes it --
   // std::shared_mutex is not reentrant.
   mutable std::shared_mutex buffers_lock_;
+  // Shared across every MessageQueue in buffers_.
+  SharedMemoryBudget total_memory_budget_;
   // Locks recording_, active_capture_count_, active_filenames_ and
   // last_capture_* below.
   std::shared_mutex state_lock_;
@@ -368,6 +407,9 @@ private:
   // same as options_.interval_single_msg_types_ today.
   ProfileSet profiles_;
   TopicResolver topic_resolver_;
+  // Embeds each topic's schema at create_topic() time, so a bare .mcap opens
+  // in Foxglove without the rest of the bag directory.
+  rosbag2_cpp::LocalMessageDefinitionSource definitions_;
   // Profile topics whose publisher hasn't appeared yet. Retried on
   // poll_topic_timer_ alongside pollTopics() (all_topics_ discovery).
   std::vector<std::string> pending_profile_topics_;
@@ -392,6 +434,9 @@ private:
   void topicCb(
     std::shared_ptr<const rclcpp::SerializedMessage> msg,
     std::shared_ptr<MessageQueue> queue);
+  // Called from topicCb() when push() reports BUDGET_FULL: pops from
+  // whichever buffer holds the most until `bytes` fits or nothing is left.
+  void evictFromLargestBuffer(int64_t bytes);
   // Action Server callbacks, write all of part of the internal buffers to a bag file
   // according to request parameters
   // Handle Goal

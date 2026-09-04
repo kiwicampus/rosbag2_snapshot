@@ -75,6 +75,7 @@ bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, 
       spec.type = node["type"] ? node["type"].as<std::string>() : "";
       spec.qos = node["qos"] ? node["qos"].as<std::string>() : "";
       spec.max_rate_hz = node["max_rate_hz"] ? node["max_rate_hz"].as<double>() : 0.0;
+      spec.forward = node["forward"] ? node["forward"].as<bool>() : true;
 
       if (spec.max_rate_hz < 0.0) {
         error = "max_rate_hz for topic " + spec.name + " must be >= 0";

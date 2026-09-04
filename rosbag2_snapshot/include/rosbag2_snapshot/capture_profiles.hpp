@@ -24,6 +24,10 @@ struct ProfileTopicSpec
   // When this profile is selected in a TriggerSnapshot request, messages for
   // this topic are throttled to at most one per 1/max_rate_hz. 0 = no limit.
   double max_rate_hz = 0.0;
+  // false = keep this topic's pre-trigger buffer in a forward capture, but
+  // don't include what arrives after the trigger. true (default) records
+  // both. No effect outside a forward capture.
+  bool forward = true;
 };
 
 struct CaptureProfile

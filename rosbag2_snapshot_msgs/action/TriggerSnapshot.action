@@ -1,46 +1,33 @@
 # goal definition
-string filename                      # Name of bag file to save snapshot to.
-                                     # if it ends in .bag, this exact filename will be saved.
-                                     # otherwise, the current datetime and .bag will be appended to the name
-                                     #   example: "test" -> test2018-05-23-10-04-20.bag
-                                     #   example: "test.bag" -> test.bag
-TopicDetails[] topics                # List of topics to include in snapshot.
-                                     # If empty, all buffered topics will be written
-builtin_interfaces/Time start_time   # Earliest timestamp for a message to be included in written bag
-                                     # If time(0), start at the earliest message in each topic's buffer
-builtin_interfaces/Time stop_time    # Latest timestamp for a message to be included in written bag
-                                     # If time(0), stop at the most recent message in each topic's buffer
-bool use_h264                        # If true, compress image topics using h264 encoding
-bool throttle_msgs                   # If true, use the parameter of the topic to set the period of the messages
-                                     # If false, include all messages in the time range
-bool use_interval_mode               # If true, start_time and stop_time are interpreted as an interval around msg_timestamp
-                                     # If false, start_time and stop_time are interpreted as absolute times
-builtin_interfaces/Time  msg_timestamp  # Timestamp of the message that triggered the snapshot
-                                        # that must be included. Helps in the interval_mode to avoid missing the message
-float32 interval_mode_tolerance       # Tolerance in seconds for interval mode. If a message falls within the interval
-                                     # [msg_timestamp - interval_mode_tolerance, msg_timestamp + interval_mode_tolerance]
-                                     # it will be included in the snapshot
-bool interval_mode_single_msg        # If true, write one message per applicable topic (CameraInfo, ImageMarker,
-                                     # compressed Image, or any type listed in interval_single_msg_types). Prefer exact
-                                     # semantic stamp == msg_timestamp; if none in the buffer window, use closest time and log a warning.
-                                     # If false, all messages within the interval will be included
-string rosbag_preset_profile         # Name of the rosbag2 profile to use for the snapshot. If empty, the default profile will be used
-string profile                       # Name of a capture profile (from capture_profiles_dir) selecting which topics to
-                                     # write and their per-topic max_rate_hz. If empty, behaves exactly as today: topics
-                                     # (if set) or all buffered topics are written, honoring throttle_msgs. Unlike
-                                     # throttle_period/throttle_msgs, a named profile's max_rate_hz always applies.
-float32 post_duration_s              # If > 0, defer writing until this many seconds after the goal is accepted
-                                     # (or until the goal is canceled, whichever comes first), so the bag also
-                                     # includes messages that arrive after the trigger -- a forward/live capture.
-                                     # Every buffered topic keeps being buffered during the wait exactly as
-                                     # always; nothing new is subscribed. If 0 (default), behaves exactly as
-                                     # today: written immediately from whatever's already buffered. Rejected at
-                                     # goal-acceptance time if it exceeds the node's max_post_duration_s parameter.
-bool use_flat_output                 # If false (default), filename ends up a bag directory (rosbag2's usual
-                                     # <filename>/<basename>_0.mcap + metadata.yaml layout) -- unchanged from
-                                     # every existing caller. If true, only the single .mcap is kept, moved to
-                                     # exactly filename, self-describing (embedded schema + offered QoS) so it
-                                     # opens standalone with no surrounding directory.
+string filename                      # Bag name. Ending in .bag saves exactly that name;
+                                     # otherwise the current datetime + .bag is appended
+                                     #   "test" -> test2018-05-23-10-04-20.bag
+                                     #   "test.bag" -> test.bag
+TopicDetails[] topics                # Topics to include. Empty = every buffered topic
+builtin_interfaces/Time start_time   # Earliest message to include. time(0) = each topic's oldest buffered message
+builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message
+bool use_h264                        # Compress image topics with h264
+bool throttle_msgs                   # Apply each topic's configured throttle period; false = every message in range
+bool use_interval_mode               # Interpret start_time/stop_time as an interval around msg_timestamp
+                                     # instead of as absolute times
+builtin_interfaces/Time  msg_timestamp  # Timestamp of the message that triggered the snapshot; kept out of
+                                        # interval_mode_tolerance rounding so that message is never missed
+float32 interval_mode_tolerance       # interval_mode window: [msg_timestamp - tolerance, msg_timestamp + tolerance]
+bool interval_mode_single_msg        # Write one message for CameraInfo/ImageMarker/compressed Image/
+                                     # interval_single_msg_types topics: exact stamp == msg_timestamp preferred,
+                                     # else closest with a warning. false = every message in the interval
+string rosbag_preset_profile         # rosbag2 storage profile. Empty = default profile
+string profile                       # Named capture profile (capture_profiles_dir) selecting topics and their
+                                     # max_rate_hz. Empty = topics (or all buffered) honoring throttle_msgs.
+                                     # A profile's max_rate_hz always applies, unlike throttle_msgs
+float32 post_duration_s              # >0 defers writing until this many seconds after goal acceptance (or
+                                     # until canceled), producing a forward/live capture that also includes
+                                     # messages arriving after the trigger; buffering is otherwise unchanged.
+                                     # 0 (default) writes immediately from what's already buffered. Rejected
+                                     # at goal-acceptance time if it exceeds the node's max_post_duration_s
+bool use_flat_output                 # false (default): filename becomes a bag directory (rosbag2's usual
+                                     # <filename>/<basename>_0.mcap + metadata.yaml). true: only the single
+                                     # self-describing .mcap is kept, moved to exactly filename
 ---
 # result definition
 bool success                         # True if snapshot successfully written to disk

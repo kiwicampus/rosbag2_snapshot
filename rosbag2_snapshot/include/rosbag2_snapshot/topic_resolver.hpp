@@ -1,8 +1,3 @@
-/*
-    Kiwi added this file
-    Any inquires, please contact AI&Robotics Team, Kiwibot
-*/
-
 #ifndef ROSBAG2_SNAPSHOT__TOPIC_RESOLVER_HPP_
 #define ROSBAG2_SNAPSHOT__TOPIC_RESOLVER_HPP_
 

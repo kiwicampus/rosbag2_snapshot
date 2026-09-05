@@ -44,18 +44,11 @@ inline bool endsWithLiteral(const std::string & value, const std::string & suffi
 }  // namespace detail
 
 // A TriggerSnapshot goal's filename is used verbatim as the on-disk final
-// path (directory or, with use_flat_output, the single .mcap), so
-// handle_goal() rejects anything that doesn't literally end in one of these
-// suffixes -- deliberately kept in its own ROS-free header (no rclcpp/etc.)
-// so it's unit-testable with plain gtest, same pattern as forward_capture.hpp
-// -- see test/test_accepted_filename.cpp.
-//
-// ".bag" is data_server_cpp's own on-disk naming convention (it always
-// builds filenames ending in ".bag" itself, directory-mode output) and must
-// keep being accepted unconditionally. ".mcap" is additive: it lets a
-// use_flat_output=true caller (e.g. blackbox) pass its real destination
-// filename straight through instead of appending a synthetic ".bag" suffix
-// only to strip it again after the result comes back.
+// path, so handle_goal() rejects anything not ending in ".bag" (the usual
+// rosbag2 directory-mode convention) or ".mcap" (lets a use_flat_output=true
+// caller, e.g. blackbox, pass its real destination filename straight
+// through). ROS-free header: unit-testable with plain gtest, see
+// test/test_accepted_filename.cpp.
 inline bool hasAcceptedGoalFilename(const std::string & filename)
 {
   return !filename.empty() &&

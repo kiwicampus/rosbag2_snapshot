@@ -79,17 +79,15 @@ using TriggerSnapAction = rosbag2_snapshot_msgs::action::TriggerSnapshot;
 using namespace ffmpeg_image_transport;
 #endif
 
-/* Configuration for a the compression settings of an image topic
-
- */
+// Compression settings for a single image topic.
 struct ImageCompressionOptions
 {
-  bool use_compression = false; // whether to use compression
-  std::string format; // can be jpg or png
-  cv::ImwriteFlags imwrite_flag; // The flag to set in opencv imencode function;
-  int imwrite_flag_value; // quality for the jpg compression (0-100) or compression level for png compression (0-9)
+  bool use_compression = false;
+  std::string format;  // "jpg" or "png"
+  cv::ImwriteFlags imwrite_flag;  // opencv imencode() flag
+  int imwrite_flag_value;  // jpg quality (0-100) or png compression level (0-9)
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-  std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
+  std::shared_ptr<FFMPEGEncoder> encoder;  // video compression, if used
 #endif
 };
 
@@ -102,11 +100,9 @@ struct TopicDetails
   int queue_depth = -1;
   int old_messages_to_keep = -1;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
-  // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
-  // max time between messages to save (in seconds)
-  double throttle_period = -1.0;
-  // If true and H264 enabled, throttle_period is ignored and all messages are saved
+  double throttle_period = -1.0;  // min seconds between saved messages
+  // If true (and H264 enabled), throttle_period is ignored and every message is saved.
   bool h264_throttle_skip = false;
   // In a forward capture, whether arrivals after the trigger are included.
   // Named apart from "forward" (the capture-level post_duration_s mode)
@@ -159,29 +155,20 @@ const rclcpp::QoS qos_string_to_qos(std::string str)
 
 class Snapshotter;
 
-/* Configuration for a single topic in the Snapshotter node. Holds
- * the buffer limits for a topic by duration (time difference between newest and oldest message)
- * and memory usage, in bytes.
- */
+// Per-topic buffer limits: how much time (newest vs. oldest message) and
+// memory a single topic's queue may hold before older messages are dropped.
 struct SnapshotterTopicOptions
 {
-  // When the value of duration_limit_, do not truncate the buffer
-  // no matter how large the duration is
+  // duration_limit_ value meaning "never truncate by age".
   static const rclcpp::Duration NO_DURATION_LIMIT;
-  // When the value of memory_limit_, do not trunctate the buffer
-  // no matter how much memory it consumes (DANGROUS)
+  // memory_limit_ value meaning "never truncate by size" (dangerous: unbounded growth).
   static const int64_t NO_MEMORY_LIMIT;
-  // When the value of duration_limit_, inherit the limit from
-  // the node's configured default
+  // duration_limit_ value meaning "use the node's configured default".
   static const rclcpp::Duration INHERIT_DURATION_LIMIT;
-  // When the value of memory_limit_, inherit the limit from
-  // the node's configured default
+  // memory_limit_ value meaning "use the node's configured default".
   static const int64_t INHERIT_MEMORY_LIMIT;
 
-  // Maximum difference in time from newest and oldest message in
-  // buffer before older messages are removed
   rclcpp::Duration duration_limit_;
-  // Maximum memory usage of the buffer before older messages are removed.
   // int64_t (not int32_t): this is a byte count, and default_memory_limit is
   // configured in MB then multiplied by 1e6 -- a config value of a couple
   // GB would overflow a 32-bit count.
@@ -192,65 +179,55 @@ struct SnapshotterTopicOptions
     int64_t memory_limit = INHERIT_MEMORY_LIMIT);
 };
 
-/* Configuration for the Snapshotter node. Contains default limits for memory and duration
- * and a map of topics to their limits which may override the defaults.
- */
+// Node-wide configuration: default per-topic limits, plus the explicit
+// topics_ map of overrides.
 struct SnapshotterOptions
 {
-  // Duration limit to use for a topic's buffer if one is not specified
+  // Default duration_limit_ for a topic that doesn't specify its own.
   rclcpp::Duration default_duration_limit_;
-  // Memory limit to use for a topic's buffer if one is not specified, in
-  // bytes. int64_t: see the comment on SnapshotterTopicOptions::memory_limit_.
+  // Default memory_limit_ (bytes) for a topic that doesn't specify its own.
+  // int64_t: see the comment on SnapshotterTopicOptions::memory_limit_.
   int64_t default_memory_limit_;
   // Upper bound on a goal's post_duration_s (forward/live capture window).
   // <= 0 disables forward captures entirely, not "unlimited" -- see
   // forward_capture.hpp's forwardCaptureWithinLimit().
   double max_post_duration_s_ = 300.0;
-  // Flag if all topics should be recorded
-  bool all_topics_;
-  // Flag to tell if compression should be used
-  std::string rosbag_preset_profile_;
-  // Message types to narrow down to one message in interval mode. This package is meant
-  // to work on any robot, so it can't hardcode a robot's own message types; instead each
-  // deployment lists its own here (interval_single_msg_types param). Only works for types
-  // that really have a header.stamp, see HeaderStampReader.
+  bool all_topics_;  // record every topic on the graph, not just topics_
+  std::string rosbag_preset_profile_;  // rosbag2 storage compression preset
+  // Message types narrowed to one message in interval mode (interval_single_msg_types
+  // param). Deployment-configured rather than hardcoded, since this package targets
+  // any robot. Only applies to types with a real header.stamp -- see HeaderStampReader.
   std::unordered_set<std::string> interval_single_msg_types_;
   // Directory of "<name>.yaml" capture profile files (see capture_profiles.hpp).
-  // Optional; "" means no profiles are configured and only the static topics_
-  // list below exists, exactly as before this feature.
+  // "" means none configured.
   std::string capture_profiles_dir_;
-  // Total bytes every topic's queue may hold combined, on top of each
-  // topic's own memory_limit_. <= 0 (the default) means no shared cap.
-  // Set via the total_memory_limit param (MB), converted to bytes like
-  // default_memory_limit_.
+  // Combined byte cap across every topic's queue, on top of each topic's own
+  // memory_limit_. <= 0 (default) means no shared cap. Set via the
+  // total_memory_limit param (MB), converted to bytes like default_memory_limit_.
   int64_t total_memory_limit_{0};
 
   typedef std::map<TopicDetails, SnapshotterTopicOptions> topics_t;
-  // Provides list of topics to snapshot and their limit configurations
   topics_t topics_;
 
   SnapshotterOptions(
     rclcpp::Duration default_duration_limit = rclcpp::Duration(30s),
     int64_t default_memory_limit = -1);
 
-  // Add a new topic to the configuration, returns false if the topic was already present
+  // Adds a topic to the configuration; false if it was already present.
   bool addTopic(
     const TopicDetails & topic_details,
     rclcpp::Duration duration_limit = SnapshotterTopicOptions::INHERIT_DURATION_LIMIT,
     int64_t memory_limit = SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT);
 };
 
-/* Stores a buffered message of an ambiguous type and it's associated metadata (time of arrival),
- * for later writing to disk
- */
+// A buffered message plus its arrival time, held until written to disk.
 struct SnapshotMessage
 {
   SnapshotMessage(
     std::shared_ptr<const rclcpp::SerializedMessage> _msg,
     rclcpp::Time _time);
   std::shared_ptr<const rclcpp::SerializedMessage> msg;
-  // ROS time when messaged arrived (does not use header stamp)
-  rclcpp::Time time;
+  rclcpp::Time time;  // receipt time, not the message's own header stamp
 };
 
 // Outcome of trying to add a message to a MessageQueue.
@@ -269,26 +246,19 @@ enum class MessageQueuePushResult
   BUDGET_FULL,
 };
 
-/* Stores a queue of buffered messages for a single topic ensuring
- * that the duration and memory limits are respected by truncating
- * as needed on push() operations.
- */
+// A single topic's buffered messages, truncated on push() as needed to
+// respect its duration and memory limits.
 class MessageQueue
 {
   friend Snapshotter;
 
 private:
-  // Logger for outputting ROS logging messages
   rclcpp::Logger logger_;
-  // Locks access to size_ and queue_
-  mutable std::mutex lock;
-  // Stores limits on buffer size and duration
+  mutable std::mutex lock;  // guards size_ and queue_
   SnapshotterTopicOptions options_;
-  // Current total size of the queue, in bytes
-  int64_t size_;
+  int64_t size_;  // current total size of queue_, in bytes
   typedef std::deque<SnapshotMessage> queue_t;
   queue_t queue_;
-  // Subscriber to the callback which uses this queue
   std::shared_ptr<rclcpp::GenericSubscription> sub_;
   // Not owned; null for a clone() (never pushed to).
   SharedMemoryBudget * shared_budget_{nullptr};
@@ -297,29 +267,26 @@ public:
   explicit MessageQueue(
     const SnapshotterTopicOptions & options, const rclcpp::Logger & logger,
     SharedMemoryBudget * shared_budget = nullptr);
-  // Add a new message to the internal queue if possible, truncating the front
-  // of the queue as needed to enforce limits
   MessageQueuePushResult push(const SnapshotMessage & msg);
-  // Removes the message at the front of the queue (oldest) and returns it
+  // Removes and returns the oldest message.
   SnapshotMessage pop();
-  // Returns the time difference between back and front of queue, or 0 if size <= 1
+  // Time difference between the newest and oldest buffered message, or 0 if size <= 1.
   rclcpp::Duration duration() const;
-  // Clear internal buffer
   void clear();
-  // Store the subscriber for this topic's queue internaly so it is not deleted
+  // Keeps the subscription alive for as long as this queue exists.
   void setSubscriber(std::shared_ptr<rclcpp::GenericSubscription> sub);
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
-  // Get a begin and end iterator into the buffer respecting the start and
-  // end timestamp constraints
+  // [start, end] window into the buffer.
   range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end, int old_messages_to_keep = -1);
-  // Get a begin and end iterator into the buffer around the msg_timestamp and tolerance
+  // Window into the buffer around msg_timestamp +/- tolerance.
   range_t intervalFromTimesMsg(const rclcpp::Time & msg_timestamp, const double & tolerance);
 
-  // Return the total message size including the meta-information
+  // Total message size, including metadata overhead.
   int64_t getMessageSize(SnapshotMessage const & msg) const;
 
   bool refreshBuffer(rclcpp::Time const& time);
-  // Method to clone the current queue and its state
+  // Deep-copies the queue and its state (used to snapshot a buffer for writing
+  // without blocking new messages from arriving on the live queue).
   std::shared_ptr<MessageQueue> clone();
   // Bytes currently held, for cross-queue eviction comparisons.
   int64_t usedBytes() const
@@ -331,22 +298,17 @@ public:
   bool popOldest();
 
 private:
-  // Internal push whitch does not obtain lock
+  // Lock-free counterparts of push()/pop()/clear(), for callers already holding `lock`.
   MessageQueuePushResult _push(SnapshotMessage const & msg);
-  // Internal pop which does not obtain lock
   SnapshotMessage _pop();
-  // Internal clear which does not obtain lock
   void _clear();
-  // Truncate front of queue as needed to fit a new message of specified size and time.
-  // Returns the same tri-state _push()/push() do.
+  // Truncates the front of the queue to fit a new message of the given size/time.
   MessageQueuePushResult preparePush(int32_t size, rclcpp::Time const & time);
 };
 
-// Snapshotter node. Maintains a circular buffer of the most recent messages
-// from configured topics while enforcing limits on memory and duration.
-// The node can be triggered to write some or all of these buffers to a bag
-// file via a service call. Useful in live testing scenerios where interesting
-// data may be produced before a user has the oppurtunity to "rosbag record" the data.
+// Buffers the most recent messages from configured topics, enforcing each
+// topic's memory/duration limits, and writes some or all of a buffer to a
+// bag on a TriggerSnapshot action goal. See the package README.
 class Snapshotter : public rclcpp::Node
 {
 public:
@@ -354,24 +316,19 @@ public:
   ~Snapshotter();
 
 private:
-  // Subscribe queue size for each topic
-  static const int QUEUE_SIZE;
+  static const int QUEUE_SIZE;  // subscription queue size for every topic
   SnapshotterOptions options_;
   typedef std::map<TopicDetails, std::shared_ptr<MessageQueue>> buffers_t;
   buffers_t buffers_;
-  // Protects buffers_ (the map itself: iteration, emplace, size()) only.
-  // Kept separate from state_lock_ below rather than folded into it, since
-  // state_lock_'s own scope is deliberately narrower (see its comment) and
-  // conflating the two would risk a lock-ordering mistake. A capture's
-  // worker task (std::async, off the executor thread -- see
-  // capture_futures_ below) can read buffers_ while a forward capture is
-  // waiting out its post_duration_s, at the same time the 1Hz
-  // poll_topic_timer_ on the executor thread inserts newly-discovered
-  // topics into it; each MessageQueue reached through buffers_ has its own
-  // separate internal lock (see MessageQueue::lock) once obtained, so this
-  // mutex's critical sections should cover only the direct map access
-  // itself, never a nested call into another method that also takes it --
-  // std::shared_mutex is not reentrant.
+  // Guards buffers_ itself (iteration, emplace, size()), separate from
+  // state_lock_ so the two can't be confused into a lock-ordering mistake.
+  // A capture's worker task (std::async, off the executor thread) can read
+  // buffers_ while a forward capture waits out its post_duration_s, at the
+  // same time poll_topic_timer_ inserts newly-discovered topics on the
+  // executor thread. Each MessageQueue has its own separate lock once
+  // reached through buffers_, so a critical section here must cover only the
+  // direct map access, never a nested call into a method that also takes
+  // this lock -- std::shared_mutex is not reentrant.
   mutable std::shared_mutex buffers_lock_;
   // Shared across every MessageQueue in buffers_.
   SharedMemoryBudget total_memory_budget_;
@@ -380,14 +337,12 @@ private:
   std::shared_mutex state_lock_;
   // True if new messages are being written to the internal buffer
   bool recording_;
-  // Number of captures currently in flight, from the moment a goal is
-  // accepted (handle_goal) until it's fully finalized (finalizeCapture) --
-  // i.e. covers bag-open, buffer clone, write, close and rename, not just
-  // "bytes being written right now". Replaces the old single bool writing_:
-  // concurrent captures for different filenames are a real, relied-upon
-  // usage pattern (data_server_cpp tracks multiple simultaneous
-  // TriggerSnapshot goals itself), so this is a count, not a single-slot
-  // gate.
+  // Captures currently in flight, from goal acceptance (handle_goal) through
+  // full finalization (finalizeCapture) -- covers bag-open, buffer clone,
+  // write, close and rename, not just active writing. A count rather than a
+  // single-slot flag: concurrent captures of different filenames are a real,
+  // relied-upon usage pattern (a client may track several simultaneous
+  // TriggerSnapshot goals itself).
   uint32_t active_capture_count_ = 0;
   // Filenames currently being written. The only concurrency-related
   // admission check this class makes: a second goal for a filename already
@@ -423,52 +378,43 @@ private:
   // poll_topic_timer_ alongside pollTopics() (all_topics_ discovery).
   std::vector<std::string> pending_profile_topics_;
 
-  // Convert parameter values into a SnapshotterOptions object
   void parseOptionsFromParams();
-  // Replace individual topic limits with node defaults if they are
-  // flagged for it (see SnapshotterTopicOptions)
+  // Replaces a topic's INHERIT_* limits with the node's configured defaults.
   void fixTopicOptions(SnapshotterTopicOptions & options);
-  // If file is "prefix" mode (doesn't end in .bag), append current datetime and .bag to end
+  // In "prefix" mode (filename doesn't already end in .bag), appends the
+  // current datetime and .bag.
   bool postfixFilename(std::string & file);
-  /// Return current local datetime as a string such as 2018-05-22-14-28-51.
-  // Used to generate bag filenames
+  // Current local datetime as e.g. "2018-05-22-14-28-51", for bag filenames.
   std::string timeAsStr();
-  // Clear the internal buffers of all topics. Used when resuming after a pause to avoid time gaps
+  // Clears every topic's buffer, so resuming after a pause doesn't leave a
+  // time gap spanned by stale messages.
   void clear();
-  // Subscribe to one of the topics, setting up the callback to add to the respective queue
   void subscribe(
     const TopicDetails & topic_details,
     std::shared_ptr<MessageQueue> queue);
-  // Called on new message from any configured topic. Adds to queue for that topic
   void topicCb(
     std::shared_ptr<const rclcpp::SerializedMessage> msg,
     std::shared_ptr<MessageQueue> queue);
   // Called from topicCb() when push() reports BUDGET_FULL: pops from
   // whichever buffer holds the most until `bytes` fits or nothing is left.
   void evictFromLargestBuffer(int64_t bytes);
-  // Action Server callbacks, write all of part of the internal buffers to a bag file
-  // according to request parameters
-  // Handle Goal
+  // TriggerSnapshot action server callbacks.
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const TriggerSnapAction::Goal> goal);
-  // Handle Cancel
   rclcpp_action::CancelResponse handle_cancel(
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle);
-  // Handle Accepted
   void handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle);
-  // Service callback, enable or disable recording (storing new messages into queue).
-  // Used to pause before writing
+  // enable_snapshot service callback: pauses/resumes buffering.
   void enableCb(
     const std::shared_ptr<rmw_request_id_t> request_header,
     const std_srvs::srv::SetBool::Request::SharedPtr req,
     std_srvs::srv::SetBool_Response::SharedPtr res
   );
-  // Set recording_ to false and do nessesary cleaning, CALLER MUST OBTAIN LOCK
+  // pause()/resume() toggle recording_. CALLER MUST HOLD state_lock_.
   void pause();
-  // Set recording_ to true and do nesessary cleaning, CALLER MUST OBTAIN LOCK
   void resume();
-  // Poll master for new topics
+  // Polls the ROS graph for new topics (all_topics_ mode).
   void pollTopics();
   // True if a topic of this name is already in buffers_, regardless of its
   // resolved type/QoS. Used to keep all_topics_ discovery and capture-profile
@@ -492,12 +438,11 @@ private:
   // known. No-op (returns true) if a topic of this name is already buffered.
   bool subscribeResolvedTopic(
     const std::string & name, const std::string & type, const rclcpp::QoS & qos);
-  // Write the parts of message_queue within the time constraints of req to the queue
-  // If returns false, there was an error opening/writing the bag and an error message
-  // was written to res.message
-  // force_throttle: when true, each topic's throttle_period (if any) is applied
-  // regardless of req->throttle_msgs -- used when topics_details came from a
-  // named capture profile, whose max_rate_hz always applies.
+  // Writes message_queue's messages within req's time window to bag_writer.
+  // False (with res.message set) on a bag open/write error. force_throttle:
+  // apply each topic's throttle_period regardless of req->throttle_msgs --
+  // set when topic_details came from a named capture profile, whose
+  // max_rate_hz always applies.
   bool writeTopic(
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
@@ -505,16 +450,13 @@ private:
     rclcpp::Time& request_time,
     bool force_throttle = false);
 
-  // Override the topic details with the topic details from the goal
+  // Applies the goal's own per-topic overrides on top of the buffered topic's details.
   void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);
 
-  // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
 
-  // Bundles everything a capture's worker task needs. Replaces the old
-  // 3-argument std::bind call (goal_handle, cloned_buffers, bag_writer_ptr)
-  // so the staging/final path pair (and profile, for the event message) can
-  // be threaded through without an ever-growing argument list.
+  // Everything a capture's worker task needs, so it can be threaded through
+  // std::async without an ever-growing argument list.
   struct PendingCapture
   {
     std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle;
@@ -531,7 +473,6 @@ private:
     bool flat_output{false};
   };
 
-  // Iter through the message queue and write the messages to the bag
   void createBag(PendingCapture capture);
 
   // Closes the bag writer (best-effort, even on failure/cancel so the
@@ -551,15 +492,14 @@ private:
   void publishState();
 
   // Not protected by state_lock_: touched only from the executor thread
-  // (handle_accepted, and implicitly by its own destructor), never from a
-  // capture's worker task. Must be the LAST member declared in this class:
-  // members are destroyed in reverse declaration order, so declaring this
-  // last makes it the FIRST thing torn down in ~Snapshotter(), before
-  // state_lock_/buffers_/the publishers above. Each entry comes from
-  // std::async(std::launch::async, ...), whose returned std::future blocks
-  // in its destructor until that task finishes -- so simply letting this
-  // vector be destroyed joins every outstanding capture, fixing the old
-  // detached-thread use-after-free on shutdown with no explicit join code.
+  // (handle_accepted, and implicitly by this class's own destructor), never
+  // from a capture's worker task. Must stay the LAST member declared: members
+  // are destroyed in reverse declaration order, so this is the FIRST thing
+  // torn down in ~Snapshotter(), before state_lock_/buffers_/the publishers
+  // above. Each entry is a std::async(std::launch::async, ...) future, which
+  // blocks in its destructor until that task finishes -- so destroying this
+  // vector joins every outstanding capture before the rest of the node tears
+  // down.
   std::vector<std::future<void>> capture_futures_;
 };
 

@@ -212,17 +212,15 @@ bool is_message_of_type(
 }
 
 /**
- * Reads header.stamp out of a serialized message, given only its type name, no compile-time
- * knowledge of the type needed. Only works if the message really has a std_msgs/Header with a
- * builtin_interfaces/Time stamp; a field just named "header" or "stamp" doesn't count, we
- * check the actual type. Anything else is cleanly rejected.
+ * Reads header.stamp out of a serialized message given only its type name, with no
+ * compile-time knowledge of the type. Verifies the field is really a std_msgs/Header with
+ * a builtin_interfaces/Time stamp (not just named "header"/"stamp") before reading it, and
+ * cleanly rejects anything else.
  *
- * This package is meant to work on any robot, so it can't depend on a robot's own message
- * packages just to read a timestamp, the way deserializing into a hardcoded C++ type would
- * require. Looking the type up at runtime avoids that, and works no matter where header
- * sits in the message (some types put it last, not first).
- *
- * Type lookups load a shared library, so we cache the result per type name.
+ * This package targets any robot, so it can't depend on a robot's own message packages to
+ * read a timestamp the way deserializing into a hardcoded C++ type would require. Resolving
+ * the layout at runtime avoids that and works regardless of field order. Each type's layout
+ * is resolved once and cached, since the lookup loads a shared library.
  */
 class HeaderStampReader
 {
@@ -351,13 +349,10 @@ bool topic_uses_interval_single_msg_narrowing(
   const TopicDetails & details,
   const std::unordered_set<std::string> & interval_single_msg_types)
 {
-  // Built-in, unconditional: these narrowed before this package took a config-driven
-  // approach to eligibility, so keeping them hardcoded avoids silently dropping that
-  // behavior for any deployment that upgrades without also listing them in
-  // interval_single_msg_types. Both come from sensor_msgs/visualization_msgs, which this
-  // package already depends on regardless of which robot it runs on, so hardcoding them
-  // doesn't break the "no robot-specific dependencies" goal the way a robot's own message
-  // type would.
+  // Hardcoded and unconditional, so an upgrade doesn't silently drop this narrowing for a
+  // deployment that hasn't listed them in interval_single_msg_types. Safe to hardcode: both
+  // types come from sensor_msgs/visualization_msgs, which this package already depends on
+  // regardless of which robot it runs on.
   if (details.type == "sensor_msgs/msg/CameraInfo") {
     return true;
   }
@@ -531,13 +526,12 @@ void MessageQueue::_clear()
 {
   if(options_.duration_limit_.seconds() > 0.0)
   {
-    // Safely clear the queue
     try {
       queue_.clear();
       size_ = 0;
     } catch (const std::exception& e) {
       RCLCPP_ERROR(logger_, "Exception during queue clear: %s", e.what());
-      size_ = 0;  // Reset size even if clear failed
+      size_ = 0;
     }
   }
   else
@@ -548,7 +542,6 @@ void MessageQueue::_clear()
 
 rclcpp::Duration MessageQueue::duration() const
 {
-  // No duration if 0 or 1 messages
   if (queue_.size() <= 1) {
     return rclcpp::Duration(0s);
   }
@@ -557,13 +550,13 @@ rclcpp::Duration MessageQueue::duration() const
 
 MessageQueuePushResult MessageQueue::preparePush(int32_t size, rclcpp::Time const & time)
 {
-  // If new message is older than back of queue, time has gone backwards and buffer must be cleared
+  // A message older than the current back means the clock jumped backwards; the buffer's
+  // ordering assumption no longer holds, so start over.
   if (!queue_.empty() && time < queue_.back().time) {
     RCLCPP_WARN(logger_, "Time has gone backwards. Clearing buffer for this topic.");
     _clear();
   }
 
-  // The only case where message cannot be addded is if size is greater than limit
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT &&
     size > options_.memory_limit_)
   {
@@ -573,16 +566,13 @@ MessageQueuePushResult MessageQueue::preparePush(int32_t size, rclcpp::Time cons
     return MessageQueuePushResult::DROPPED_TOO_LARGE;
   }
 
-  // If memory limit is enforced, remove elements from front of queue until limit
-  // would be met once message is added
+  // Evict oldest-first until the new message would fit under each enforced limit.
   if (options_.memory_limit_ > SnapshotterTopicOptions::NO_MEMORY_LIMIT) {
     while (queue_.size() != 0 && size_ + size > options_.memory_limit_) {
       _pop();
     }
   }
 
-  // If duration limit is encforced, remove elements from front of queue until duration limit
-  // would be met once message is added
   if (options_.duration_limit_ > SnapshotterTopicOptions::NO_DURATION_LIMIT &&
     queue_.size() != 0)
   {
@@ -635,13 +625,14 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const & snapshot_msg) const
 {
-  // Account for message data + metadata + deque overhead + shared_ptr overhead
+  // Message payload plus an estimate of its SnapshotMessage/deque-node/shared_ptr overhead,
+  // so size_ and the memory limits it's checked against are in the same units.
   size_t message_size = snapshot_msg.msg->size();
   size_t metadata_size = sizeof(SnapshotMessage);
-  size_t deque_overhead = sizeof(std::deque<SnapshotMessage>::value_type) + 32; // Approximate node overhead
-  size_t shared_ptr_overhead = sizeof(std::shared_ptr<const rclcpp::SerializedMessage>) + 
+  size_t deque_overhead = sizeof(std::deque<SnapshotMessage>::value_type) + 32;
+  size_t shared_ptr_overhead = sizeof(std::shared_ptr<const rclcpp::SerializedMessage>) +
                                sizeof(rclcpp::SerializedMessage);
-  
+
   return message_size + metadata_size + deque_overhead + shared_ptr_overhead;
 }
 
@@ -653,7 +644,6 @@ MessageQueuePushResult MessageQueue::_push(SnapshotMessage const & _out)
     return result;
   }
   queue_.push_back(_out);
-  // Add size of new message to running count to maintain correctness
   const int64_t added = getMessageSize(_out);
   size_ += added;
   if (shared_budget_ != nullptr) {
@@ -666,7 +656,6 @@ SnapshotMessage MessageQueue::_pop()
 {
   SnapshotMessage tmp = queue_.front();
   queue_.pop_front();
-  //  Remove size of popped message to maintain correctness of size_
   const int64_t freed = getMessageSize(tmp);
   size_ -= freed;
   if (shared_budget_ != nullptr) {
@@ -690,10 +679,8 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
 
-  
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
-    // Increment / Decrement iterators until time contraints are met
     range_t::first_type time_begin = begin;
     if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
       while (time_begin != end && (*time_begin).time < start) {
@@ -706,7 +693,7 @@ MessageQueue::range_t MessageQueue::rangeFromTimes(Time const & start, Time cons
       }
     }
 
-    // If old_messages_to_keep is positive, include that many messages before the time window
+    // old_messages_to_keep extends the window backwards by that many messages.
     if (old_messages_to_keep > 0 && time_begin != begin) {
       begin = (time_begin - old_messages_to_keep > begin) ? time_begin - old_messages_to_keep : begin;
     } else {
@@ -721,14 +708,11 @@ MessageQueue::range_t MessageQueue::intervalFromTimesMsg(Time const & msg_timest
   range_t::first_type begin = queue_.begin();
   range_t::second_type end = queue_.end();
 
-  // determine start and stop times
   Time start = msg_timestamp - rclcpp::Duration::from_seconds(tolerance);
   Time stop = msg_timestamp + rclcpp::Duration::from_seconds(tolerance);
 
-  // Check that msg_timestamp is within the range of the queue
   if(options_.duration_limit_ != options_.NO_DURATION_LIMIT)
   {
-    // Increment / Decrement iterators until time contraints are met
     if (start.seconds() != 0.0 || start.nanoseconds() != 0) {
       while (begin != end && (*begin).time < start) {
         ++begin;
@@ -771,7 +755,6 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   parseOptionsFromParams();
   total_memory_budget_.setLimit(options_.total_memory_limit_);
 
-  // Create the queue for each topic and set up the subscriber to add to it on new messages
   for (auto & pair : options_.topics_) {
     string topic{pair.first.name}, type{pair.first.type};
     fixTopicOptions(pair.second);
@@ -804,7 +787,6 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   // was never set (profiles_ is empty).
   subscribeProfileTopics();
 
-  // Now that subscriptions are setup, setup service servers for writing and pausing
   trigger_snapshot_action_server_ = rclcpp_action::create_server<TriggerSnapAction>(
       this,
       "trigger_snapshot",
@@ -855,7 +837,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
   std::string prefix = "topic_details." + topic;
   ImageCompressionOptions img_compression_opts;
 
-  // use compression?
   try {
     bool use_compression = declare_parameter<bool>(prefix + ".compression.enabled");
     img_compression_opts.use_compression = use_compression;
@@ -869,7 +850,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
 
   if(img_compression_opts.use_compression)
   {
-    // get compression format
     try {
       std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
       img_compression_opts.format = compression_format;
@@ -883,7 +863,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
       } else { throw ex; }
     }
 
-    // get jpg compression flags
     if(img_compression_opts.format == "jpg" || img_compression_opts.format == "jpeg")
     {
       img_compression_opts.format = "jpg";
@@ -898,7 +877,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
         } else { throw ex; }
       }
     }
-    // get png compression flags
     else if(img_compression_opts.format == "png")
     {
       img_compression_opts.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
@@ -912,7 +890,6 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
         } else { throw ex; }
       }
     }
-    // no use compression if is different than jpeg or png
     else
     {
       RCLCPP_ERROR(get_logger(), "An invalid compression format was passed for topic %s: %s. Compression will be disabled for this topic", topic.c_str(), img_compression_opts.format.c_str());
@@ -921,7 +898,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
   }
 
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-  // Init encoder for h264 in case any event triggers the use of h264
+  // Created unconditionally so it's ready if h264 encoding is later selected for this topic.
   img_compression_opts.encoder = std::make_shared<FFMPEGEncoder>();
   img_compression_opts.encoder->setParameters(this, "h264.");
 #endif
@@ -943,7 +920,7 @@ void Snapshotter::parseOptionsFromParams()
 
   try {
     options_.default_memory_limit_ =
-      declare_parameter<double>("default_memory_limit", 300.0); // Safe limit for concurrent operations
+      declare_parameter<double>("default_memory_limit", 300.0);
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "default_memory_limit is of incorrect type.");
     throw ex;
@@ -951,19 +928,18 @@ void Snapshotter::parseOptionsFromParams()
 
   try {
     options_.max_post_duration_s_ =
-      declare_parameter<double>("max_post_duration_s", 300.0);  // 5 min default cap
+      declare_parameter<double>("max_post_duration_s", 300.0);
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "max_post_duration_s is of incorrect type.");
     throw ex;
   }
 
-  // Convert memory limit in MB to B
   if (options_.default_memory_limit_ != -1.0) {
     options_.default_memory_limit_ *= MB_TO_B;
   }
 
   try {
-    // 0 = no shared cap across topics (default; keeps existing behavior).
+    // 0 = no shared cap across topics.
     options_.total_memory_limit_ =
       static_cast<int64_t>(declare_parameter<double>("total_memory_limit", 0.0));
   } catch (const rclcpp::ParameterTypeException & ex) {
@@ -1228,11 +1204,9 @@ void Snapshotter::fixTopicOptions(SnapshotterTopicOptions & options)
 bool Snapshotter::postfixFilename(string & file)
 {
   size_t ind = file.rfind(".bag");
-  // If requested ends in .bag, this is literal name do not append date
   if (ind != string::npos && ind == file.size() - 4) {
     return true;
   }
-  // Otherwise treat as prefix and append datetime and extension
   file += timeAsStr() + ".bag";
   return true;
 }
@@ -1256,7 +1230,6 @@ void Snapshotter::topicCb(
       return;
     }
   }
-  // Pack message and metadata into SnapshotMessage holder
   SnapshotMessage out(msg, this->now());
   if (queue->push(out) == MessageQueuePushResult::BUDGET_FULL) {
     evictFromLargestBuffer(static_cast<int64_t>(msg->size()));
@@ -1417,7 +1390,6 @@ bool Snapshotter::writeTopic(
   const rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
   bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
-    // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
     auto ret = rcutils_system_time_now(&bag_message->time_stamp);
     if (ret != RCL_RET_OK) {
@@ -1444,7 +1416,6 @@ bool Snapshotter::writeTopic(
         start_time_specified, stop_time_specified,
         (request_time - msg_it->time).nanoseconds(), bag_duration.nanoseconds()))
     {
-      // Put old messages at the beginning of the bag
       if (!logged_timestamp_override) {
         RCLCPP_WARN(get_logger(), "Overriding old timestamps for topic %s", tm.name.c_str());
         logged_timestamp_override = true;
@@ -1461,8 +1432,7 @@ bool Snapshotter::writeTopic(
       cv::Mat cv_img;
       sensor_msgs::msg::Image raw_img;
       img_serializer.deserialize_message(msg_it->msg.get(), &raw_img);
-      // imencode expects rgb images in `bgr` encoding, so we need to change incoming images that
-      // use `rbg8` encoding to `bgr8` encoding by hand.
+      // imencode expects bgr ordering; rgb8 images need converting by hand first.
       if(raw_img.encoding == "rgb8")
       {
         cv_img = cv::Mat(raw_img.height, raw_img.width, CV_8UC3, raw_img.data.data());
@@ -1520,7 +1490,7 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
   std::shared_ptr<const TriggerSnapAction::Goal> goal)
 {
   // filename becomes the literal on-disk final path (see finalizeCapture()),
-  // so it must end in .bag (data_server_cpp's own directory-mode naming
+  // so it must end in .bag (the usual rosbag2 directory-mode naming
   // convention) or .mcap (a use_flat_output=true caller's real destination).
   if (!hasAcceptedGoalFilename(goal->filename)) {
     RCLCPP_WARN(
@@ -1551,8 +1521,8 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
   // opening the same staging path concurrently would corrupt each other's
   // output. This is deliberately narrow: it does not limit concurrency
   // across distinct filenames at all, since concurrent captures for
-  // different events are a real, relied-upon usage pattern (data_server_cpp
-  // tracks multiple simultaneous goals itself via its own active_goals_ map).
+  // different events are a real, relied-upon usage pattern (a client may
+  // track multiple simultaneous goals itself).
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (active_filenames_.count(goal->filename)) {
@@ -1724,10 +1694,9 @@ void Snapshotter::createBag(PendingCapture capture)
     }
   }
 
-  // A named profile picks the topic list and each topic's max_rate_hz
-  // (as throttle_period, via the same override mechanism a request's own
-  // topics[].throttle_period already uses below). Empty profile: unchanged
-  // behavior, using req->topics as-is.
+  // A named profile picks the topic list and each topic's max_rate_hz (as
+  // throttle_period, via the same override mechanism topics[].throttle_period
+  // uses below). An empty profile falls back to req->topics as-is.
   bool use_profile = !req->profile.empty();
   std::vector<DetailsMsg> profile_topics;
   if (use_profile) {
@@ -1789,7 +1758,7 @@ void Snapshotter::createBag(PendingCapture capture)
       feedback->message = "Writing topic " + topic.name + " to bag file.";
       goal_handle->publish_feedback(feedback);
     }
-  } else {  // If topic list empty, record all buffered topics
+  } else {  // Empty topic list: record every buffered topic.
     for (const auto & pair : cloned_buffers) {
       if (goal_handle->is_canceling()) {
         finalizeCapture(
@@ -1814,9 +1783,8 @@ void Snapshotter::createBag(PendingCapture capture)
   }
   
   finalizeCapture(capture, success, message, result, static_cast<size_t>(count_topics), request_time);
-  // Preserves this function's pre-existing convention of calling succeed()
-  // even when result->success is false (action status "succeeded" while the
-  // semantic result reports failure) -- not changed as a drive-by fix here.
+  // Action status is always "succeeded" here; a failed capture is reported
+  // through result->success/message instead, not through the action outcome.
   goal_handle->succeed(result);
 }
 
@@ -1848,10 +1816,9 @@ void Snapshotter::finalizeCapture(
   // integrity can't be vouched for.
   std::filesystem::path saved_path = capture.staging_path;
   if (file_is_valid && !capture.flat_output) {
-    // Default: rosbag2's usual bag-directory layout, unchanged for every
-    // caller that doesn't ask for flat_output (e.g. data_server_cpp, which
-    // hard-codes <filename>/<basename>_0.mcap everywhere it reads a
-    // capture back).
+    // Default: rosbag2's usual bag-directory layout, for a caller that
+    // doesn't ask for flat_output and instead reads a capture back at the
+    // fixed <filename>/<basename>_0.mcap path rosbag2 always writes to.
     saved_path = success ? capture.final_path : partialPathFor(capture.final_path);
     std::error_code ec;
     std::filesystem::rename(capture.staging_path, saved_path, ec);
@@ -1963,7 +1930,6 @@ void Snapshotter::publishState()
 
 void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& details)
 {
-  // Only change if override is not default
   if (req_msg.throttle_period != -1.0) details.throttle_period = req_msg.throttle_period;
   if (req_msg.h264_throttle_skip != -1) details.h264_throttle_skip = req_msg.h264_throttle_skip;
   if (req_msg.override_old_timestamps != -1) details.override_old_timestamps = req_msg.override_old_timestamps;
@@ -1971,7 +1937,6 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
   if (req_msg.include_post_trigger != -1) details.include_post_trigger = req_msg.include_post_trigger;
 
-  // Image compression
   if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;
   if (req_msg.format != "")
   {
@@ -1999,9 +1964,8 @@ void Snapshotter::clear()
 {
   std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
   for (const buffers_t::value_type & pair : buffers_) {
-    // if oldest message is older than default_bag_duration, clear the queue
-    // Kiwi Added this condition to avoid clearing the buffer constantly
-    // but still clear it if the duration exceeds the limit
+    // Only clear a topic once its buffered duration exceeds its own
+    // default_bag_duration, rather than on every resume.
     if (pair.second->duration() > pair.first.default_bag_duration) {
       RCLCPP_WARN(get_logger(), 
         "Clearing buffer for topic %s current duration: %f, default_bag_duration: %f", 
@@ -2033,11 +1997,9 @@ void Snapshotter::enableCb(
 
   {
     std::shared_lock<std::shared_mutex> read_lock(state_lock_);
-    // Cannot enable while any capture is in flight. active_capture_count_
-    // covers the whole reserved-through-finalized window (see its
-    // doc-comment in snapshotter.hpp), so this check is unchanged in intent
-    // from the old writing_ bool, just backed by a real count under
-    // concurrency instead of a single racy flag.
+    // Cannot enable while any capture is in flight (active_capture_count_
+    // covers the whole reserved-through-finalized window, see its
+    // doc-comment in snapshotter.hpp).
     if (req->data && active_capture_count_ > 0) {
       res->success = false;
       res->message = "cannot enable recording while writing.";
@@ -2045,7 +2007,6 @@ void Snapshotter::enableCb(
     }
   }
 
-  // Obtain write lock and update state if requested state is different from current
   bool changed = false;
   if (req->data && !recording_) {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);

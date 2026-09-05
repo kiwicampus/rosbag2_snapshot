@@ -1,8 +1,3 @@
-/* 
-    Kiwi added this file
-    Any inquires, please contact AI&Robotics Team, Kiwibot
-*/
-
 #include <memory>
 #include "rclcpp/rclcpp.hpp"
 

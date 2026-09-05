@@ -178,14 +178,12 @@ void FFMPEGEncoder::doOpenCodec(int width, int height)
     RCLCPP_WARN(logger_, "horiz res must be multiple of 64!");
     throw(std::runtime_error("h264_nvmpi must have horiz rez mult of 64"));
   }
-  // find codec
   const AVCodec * codec = avcodec_find_encoder_by_name(codecName_.c_str());
   if (!codec) {
     throw(std::runtime_error("cannot find encoder: " + codecName_));
   }
 
   auto pixFmts = utils::get_encoder_formats(codec);
-  // allocate codec context
   codecContext_ = avcodec_alloc_context3(codec);
   if (!codecContext_) {
     throw(std::runtime_error("cannot allocate codec context!"));
@@ -240,7 +238,6 @@ void FFMPEGEncoder::doOpenCodec(int width, int height)
   frame_->width = width;
   frame_->height = height;
   frame_->format = codecContext_->sw_pix_fmt;
-  // allocate image for frame
   err = av_image_alloc(
     frame_->data, frame_->linesize, width, height, static_cast<AVPixelFormat>(frame_->format), 64);
   utils::check_for_err("cannot alloc image", err);
@@ -253,18 +250,16 @@ void FFMPEGEncoder::doOpenCodec(int width, int height)
     }
   }
 
-  // Initialize packet
   packet_ = av_packet_alloc();
   packet_->data = NULL;
   packet_->size = 0;
 
-  // create (src) frame that wraps the received uncompressed image
+  // Wraps the incoming raw BGR24 image so sws_scale() can convert it in place.
   wrapperFrame_ = av_frame_alloc();
   wrapperFrame_->width = width;
   wrapperFrame_->height = height;
   wrapperFrame_->format = AV_PIX_FMT_BGR24;
 
-  // initialize format conversion library
   if (!swsContext_) {
     swsContext_ = sws_getContext(
       width, height, AV_PIX_FMT_BGR24,                            // src
@@ -297,17 +292,17 @@ void FFMPEGEncoder::encodeImage(const cv::Mat & img, const Header & header, cons
   av_image_fill_arrays(
     wrapperFrame_->data, wrapperFrame_->linesize, &(img.data[0]),
     static_cast<AVPixelFormat>(wrapperFrame_->format), wrapperFrame_->width, wrapperFrame_->height,
-    1 /* alignment, could be better*/);
+    1 /* byte alignment */);
   sws_scale(
     swsContext_, wrapperFrame_->data, wrapperFrame_->linesize, 0,  // src
     codecContext_->height, frame_->data, frame_->linesize);        // dest
 
-  frame_->pts = pts_++;  //
+  frame_->pts = pts_++;
   ptsToStamp_.insert(PTSMap::value_type(frame_->pts, header.stamp));
 
   int ret;
   if (usesHardwareFrames_) {
-    ret = av_hwframe_transfer_data(hw_frame_, frame_, 0);  // from software -> hardware frame
+    ret = av_hwframe_transfer_data(hw_frame_, frame_, 0);  // software -> hardware frame
     utils::check_for_err("error while copying frame to hw", ret);
     hw_frame_->pts = frame_->pts;
   }
@@ -333,26 +328,17 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
   }
   const AVPacket & pk = *packet_;
   if (ret == 0 && pk.size > 0) {
-    // Kiwi Added: Channge FFMPEG packet to CompressedVideo
+    // Only format, data, frame_id and timestamp are populated: rosbag2_snapshot
+    // fetches this packet via getCompressedImage() rather than through callback_.
     CompressedVideo * packet = new CompressedVideo;
     pptr_ = CompressedVideoConstPtr(packet);
     packet->data.resize(pk.size);
-    // packet->width = width;
-    // packet->height = height;
-    // packet->pts = pk.pts;
-    // packet->flags = pk.flags;
     packet->format = "h264";
     memcpy(&(packet->data[0]), pk.data, pk.size);
-    // packet->header = header;
     packet->frame_id = header.frame_id;
     auto it = ptsToStamp_.find(pk.pts);
     if (it != ptsToStamp_.end()) {
-      // Kiwi Added: We only need the timestamp
-      // The callback is not needed as we grab the CompressedVideo from getCompressedImage()
-      // packet->header.stamp = it->second;
-      // packet->encoding = codecName_;
       packet->timestamp = it->second;
-    //   callback_(pptr);  // deliver packet callback
       ptsToStamp_.erase(it);
     } else {
       RCLCPP_ERROR_STREAM(logger_, "pts " << pk.pts << " has no time stamp!");
@@ -364,7 +350,6 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
 
 foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
 {
-  // Kiwi Added: Return CompressedVideo for it to be added to the rosbag2_snapshot
   Lock lock(mutex_);
   if (pptr_) {
       return (*pptr_);

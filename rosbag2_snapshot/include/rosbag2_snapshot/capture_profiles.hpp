@@ -1,7 +1,5 @@
-/*
-    Kiwi added this file
-    Any inquires, please contact AI&Robotics Team, Kiwibot
-*/
+// Named capture profiles: topic sets loaded from capture_profiles_dir,
+// selectable by name on a TriggerSnapshot request. See loadProfilesDir().
 
 #ifndef ROSBAG2_SNAPSHOT__CAPTURE_PROFILES_HPP_
 #define ROSBAG2_SNAPSHOT__CAPTURE_PROFILES_HPP_
@@ -35,12 +33,10 @@ struct ProfileTopicSpec
 struct CaptureProfile
 {
   std::string name;
-  // Names of other profiles this one nests, in order. Resolved by
-  // loadProfilesDir(): by the time a CaptureProfile is handed out, `topics`
-  // already holds the fully merged list (each included profile's topics, in
-  // include order, then this profile's own topics -- later entries override
-  // an earlier one of the same name). Kept here only for inspection; nothing
-  // downstream needs to re-resolve it.
+  // Other profiles this one nests, in order. Already resolved into `topics`
+  // by loadProfilesDir() (included topics first, in include order, then this
+  // profile's own, later entries winning on a shared name); kept here only
+  // for inspection.
   std::vector<std::string> includes;
   std::vector<ProfileTopicSpec> topics;
 };

@@ -36,20 +36,18 @@ namespace rosbag2_snapshot
 
 // True if a buffered message's own timestamp should be replaced with the
 // request's start_time when writing it into a bag, rather than keeping the
-// time it actually arrived. Deliberately kept in its own ROS-free header (no
-// rclcpp/builtin_interfaces/etc.) so it's unit-testable with plain gtest --
-// see test/test_timestamp_override.cpp -- same pattern as
-// forward_capture.hpp and staging_path.hpp.
+// time it actually arrived. ROS-free header: unit-testable with plain gtest,
+// see test/test_timestamp_override.cpp.
 //
 // Only true when both:
 //  - the topic opted in (override_old_timestamps, or old_messages_to_keep
 //    greater than zero), and
-//  - the request actually specifies a real time window, i.e. start_time or
-//    stop_time is set. A request that leaves both at their zero default asks
-//    for "everything currently buffered" -- there is no window to be
-//    "outside of" in that case, so every message keeps its own timestamp
-//    regardless of the topic's settings. Every forward (live) capture leaves
-//    both at zero, and so does any request that doesn't set them.
+//  - the request specifies a real time window (start_time or stop_time set).
+//    A request that leaves both at zero asks for "everything currently
+//    buffered" -- there is no window to be "outside of", so every message
+//    keeps its own timestamp regardless of the topic's settings. Every
+//    forward (live) capture, and any request that doesn't set them, leaves
+//    both at zero.
 inline bool shouldOverrideOldTimestamp(
   bool override_old_timestamps,
   int old_messages_to_keep,

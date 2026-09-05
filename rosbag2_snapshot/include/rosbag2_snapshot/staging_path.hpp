@@ -36,9 +36,8 @@ namespace rosbag2_snapshot
 
 // Staging path for a bag's atomic write: same directory/filesystem as
 // final_path (so the rename in Snapshotter::finalizeCapture() is atomic,
-// never a fallback copy), just suffixed. Deliberately kept in its own
-// ROS-free header (no rclcpp/OpenCV/etc.) so it's unit-testable with plain
-// gtest -- see test/test_staging_path.cpp.
+// never a fallback copy), just suffixed. ROS-free header: unit-testable with
+// plain gtest, see test/test_staging_path.cpp.
 inline std::filesystem::path stagingPathFor(const std::filesystem::path & final_path)
 {
   std::filesystem::path staging_path = final_path;
@@ -48,14 +47,9 @@ inline std::filesystem::path stagingPathFor(const std::filesystem::path & final_
 
 // Where a capture is saved if it didn't fully complete (canceled, or a topic
 // failed to write) but the bag writer still closed the file cleanly. Always
-// distinct from final_path: this package doesn't assume anything about how
-// a deployment's own tooling picks up finished bags, so a partial capture is
-// never placed at the exact path a full success would use, only ever found
-// by something that explicitly knows to look for it -- see the
-// "Concurrent captures & atomic writes" section of the README. Deliberately
-// kept in this same ROS-free header, alongside stagingPathFor(), for the
-// same reason: unit-testable with plain gtest -- see
-// test/test_staging_path.cpp.
+// distinct from final_path, so a partial capture is never mistaken for a
+// complete one just because a file exists at the requested name -- see
+// "Concurrent captures & atomic writes" in the README.
 inline std::filesystem::path partialPathFor(const std::filesystem::path & final_path)
 {
   std::filesystem::path partial_path = final_path;

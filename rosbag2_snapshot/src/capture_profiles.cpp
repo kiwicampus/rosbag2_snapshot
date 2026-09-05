@@ -1,8 +1,3 @@
-/*
-    Kiwi added this file
-    Any inquires, please contact AI&Robotics Team, Kiwibot
-*/
-
 #include "rosbag2_snapshot/capture_profiles.hpp"
 
 #include <yaml-cpp/yaml.h>

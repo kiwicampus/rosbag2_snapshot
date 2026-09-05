@@ -32,10 +32,8 @@
 namespace rosbag2_snapshot
 {
 
-// True if this goal asked for a forward (live) capture at all -- deliberately
-// kept in its own ROS-free header (no rclcpp/etc.) so it's unit-testable with
-// plain gtest -- see test/test_forward_capture.cpp -- same pattern as
-// staging_path.hpp.
+// True if this goal asked for a forward (live) capture at all. ROS-free
+// header: unit-testable with plain gtest, see test/test_forward_capture.cpp.
 inline bool isForwardCaptureRequest(double post_duration_s)
 {
   return post_duration_s > 0.0;

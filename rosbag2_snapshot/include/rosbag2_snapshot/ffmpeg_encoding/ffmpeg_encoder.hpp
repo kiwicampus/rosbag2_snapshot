@@ -44,7 +44,6 @@ class FFMPEGEncoder
 {
 public:
   using Lock = std::unique_lock<std::recursive_mutex>;
-  // Kiwi added: Change from FFMPEGPacketConstPtr to CompressedVideoConstPtr
   using Callback = std::function<void(const CompressedVideoConstPtr & pkt)>;
 
   FFMPEGEncoder();
@@ -118,7 +117,8 @@ public:
   // ------- performance statistics
   void printTimers(const std::string & prefix) const;
   void resetTimers();
-  // Kiwi added: get compressed image for rosbag2_snapshot
+  // Returns the most recently encoded packet, or a default-constructed one if
+  // nothing has been encoded yet. Polled by rosbag2_snapshot; callback_ is unused.
   foxglove_msgs::msg::CompressedVideo getCompressedImage();
 
 private:

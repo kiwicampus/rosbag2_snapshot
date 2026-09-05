@@ -10,9 +10,7 @@ namespace rosbag2_snapshot
 // Total buffered bytes across every topic's MessageQueue, shared by all of
 // them so one noisy topic can't exhaust memory alone. Accounting only
 // (fits/add/release); picking which queue to trim when full is the caller's
-// job. Kept in its own ROS-free header, same as staging_path.hpp/
-// forward_capture.hpp/timestamp_override.hpp, so it's unit-testable with
-// plain gtest.
+// job.
 class SharedMemoryBudget
 {
 public:

@@ -1,8 +1,3 @@
-/*
-    Kiwi added this file
-    Any inquires, please contact AI&Robotics Team, Kiwibot
-*/
-
 #include "rosbag2_snapshot/forward_capture.hpp"
 
 #include <gtest/gtest.h>

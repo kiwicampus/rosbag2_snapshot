@@ -96,7 +96,7 @@ enum class ResolveState { kUnresolved, kVisiting, kResolved, kFailed };
 // Depth-first, memoized: resolves `name`'s final topic list (includes merged
 // in order, then this profile's own topics overriding by name) into
 // `resolved`. False (and no entry in `resolved`) if `name` doesn't exist,
-// is part of an include cycle, or ends up with no topics -- in every case a
+// is part of an include cycle, or ends up with no topics. In every case a
 // human-readable reason is appended to `warnings` and the profile is
 // dropped, the same "one bad entry doesn't take the rest down" policy
 // parseProfileFile already uses per-file.

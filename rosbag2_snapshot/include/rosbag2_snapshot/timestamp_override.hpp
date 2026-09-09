@@ -44,7 +44,7 @@ namespace rosbag2_snapshot
 //    greater than zero), and
 //  - the request specifies a real time window (start_time or stop_time set).
 //    A request that leaves both at zero asks for "everything currently
-//    buffered" -- there is no window to be "outside of", so every message
+//    buffered": there is no window to be "outside of", so every message
 //    keeps its own timestamp regardless of the topic's settings. Every
 //    forward (live) capture, and any request that doesn't set them, leaves
 //    both at zero.

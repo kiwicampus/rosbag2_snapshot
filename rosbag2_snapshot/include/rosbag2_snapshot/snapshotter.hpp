@@ -170,7 +170,7 @@ struct SnapshotterTopicOptions
 
   rclcpp::Duration duration_limit_;
   // int64_t (not int32_t): this is a byte count, and default_memory_limit is
-  // configured in MB then multiplied by 1e6 -- a config value of a couple
+  // configured in MB then multiplied by 1e6; a config value of a couple
   // GB would overflow a 32-bit count.
   int64_t memory_limit_;
 
@@ -189,14 +189,14 @@ struct SnapshotterOptions
   // int64_t: see the comment on SnapshotterTopicOptions::memory_limit_.
   int64_t default_memory_limit_;
   // Upper bound on a goal's post_duration_s (forward/live capture window).
-  // <= 0 disables forward captures entirely, not "unlimited" -- see
+  // <= 0 disables forward captures entirely, not "unlimited"; see
   // forward_capture.hpp's forwardCaptureWithinLimit().
   double max_post_duration_s_ = 300.0;
   bool all_topics_;  // record every topic on the graph, not just topics_
   std::string rosbag_preset_profile_;  // rosbag2 storage compression preset
   // Message types narrowed to one message in interval mode (interval_single_msg_types
   // param). Deployment-configured rather than hardcoded, since this package targets
-  // any robot. Only applies to types with a real header.stamp -- see HeaderStampReader.
+  // any robot. Only applies to types with a real header.stamp; see HeaderStampReader.
   std::unordered_set<std::string> interval_single_msg_types_;
   // Directory of "<name>.yaml" capture profile files (see capture_profiles.hpp).
   // "" means none configured.
@@ -241,7 +241,7 @@ enum class MessageQueuePushResult
   DROPPED_TOO_LARGE,
   // This queue's own limits are satisfied, but the shared budget still
   // doesn't fit even after trimming. Caller should evict from the largest
-  // queue and retry -- see evictFromLargestBuffer(). Never returned when
+  // queue and retry; see evictFromLargestBuffer(). Never returned when
   // shared_budget_ is null.
   BUDGET_FULL,
 };
@@ -328,7 +328,7 @@ private:
   // executor thread. Each MessageQueue has its own separate lock once
   // reached through buffers_, so a critical section here must cover only the
   // direct map access, never a nested call into a method that also takes
-  // this lock -- std::shared_mutex is not reentrant.
+  // this lock: std::shared_mutex is not reentrant.
   mutable std::shared_mutex buffers_lock_;
   // Shared across every MessageQueue in buffers_.
   SharedMemoryBudget total_memory_budget_;
@@ -338,7 +338,7 @@ private:
   // True if new messages are being written to the internal buffer
   bool recording_;
   // Captures currently in flight, from goal acceptance (handle_goal) through
-  // full finalization (finalizeCapture) -- covers bag-open, buffer clone,
+  // full finalization (finalizeCapture): covers bag-open, buffer clone,
   // write, close and rename, not just active writing. A count rather than a
   // single-slot flag: concurrent captures of different filenames are a real,
   // relied-upon usage pattern (a client may track several simultaneous
@@ -465,7 +465,7 @@ private:
     // Same directory as final_path (guarantees an atomic same-filesystem
     // rename), e.g. "<final_path>.tmp".
     std::filesystem::path staging_path;
-    // req->filename, verbatim -- never opened for writing directly.
+    // req->filename, verbatim; never opened for writing directly.
     std::filesystem::path final_path;
     // req->profile, copied for use off the executor thread (event message).
     std::string profile;
@@ -476,7 +476,7 @@ private:
   void createBag(PendingCapture capture);
 
   // Closes the bag writer (best-effort, even on failure/cancel so the
-  // staging file is left well-formed), and -- only if still successful --
+  // staging file is left well-formed) and, only if still successful,
   // atomically renames staging_path to final_path. Updates
   // result->success/message, active_capture_count_/active_filenames_/
   // last_capture_* state, and publishes the capture-completed event plus a
@@ -497,7 +497,7 @@ private:
   // are destroyed in reverse declaration order, so this is the FIRST thing
   // torn down in ~Snapshotter(), before state_lock_/buffers_/the publishers
   // above. Each entry is a std::async(std::launch::async, ...) future, which
-  // blocks in its destructor until that task finishes -- so destroying this
+  // blocks in its destructor until that task finishes, so destroying this
   // vector joins every outstanding capture before the rest of the node tears
   // down.
   std::vector<std::future<void>> capture_futures_;

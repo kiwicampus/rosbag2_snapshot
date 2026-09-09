@@ -34,7 +34,7 @@ set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
 
 # H264 image compression needs foxglove_msgs (FFMPEGEncoder's output type) on
-# top of OpenCV/cv_bridge/FFmpeg -- not published for every ROS distro/OS
+# top of OpenCV/cv_bridge/FFmpeg: not published for every ROS distro/OS
 # combination this package builds on. JPG/PNG compression (OpenCV/cv_bridge
 # alone) stays available either way; only the H264 path is compiled out when
 # it's missing, same pattern this package's own consumers use elsewhere for

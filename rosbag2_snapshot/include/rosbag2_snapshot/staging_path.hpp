@@ -48,7 +48,7 @@ inline std::filesystem::path stagingPathFor(const std::filesystem::path & final_
 // Where a capture is saved if it didn't fully complete (canceled, or a topic
 // failed to write) but the bag writer still closed the file cleanly. Always
 // distinct from final_path, so a partial capture is never mistaken for a
-// complete one just because a file exists at the requested name -- see
+// complete one just because a file exists at the requested name; see
 // "Concurrent captures & atomic writes" in the README.
 inline std::filesystem::path partialPathFor(const std::filesystem::path & final_path)
 {

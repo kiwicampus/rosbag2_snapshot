@@ -129,7 +129,7 @@ std::filesystem::path findMcapFile(const std::filesystem::path & directory)
 // it was opened* (<that_name>_0.mcap). Since bag_dir is opened under its
 // staging name and later renamed into place, the embedded file and
 // metadata.yaml's relative_file_paths/files[].path both still carry the
-// old name -- this renames the file and patches both to match bag_dir's
+// old name; this renames the file and patches both to match bag_dir's
 // current (final) basename, which is what a consumer that reconstructs the
 // data file path itself (rather than reading metadata.yaml) needs.
 void renameBagFileToMatchDirectory(const std::filesystem::path & bag_dir)
@@ -743,7 +743,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   // trigger a publishState() call via subscribeResolvedTopic()) so state_pub_
   // is never null when publishState() runs. Plain volatile QoS, not
   // transient_local: this node is always run with intra-process communication
-  // enabled (see main.cpp), which only supports volatile durability -- a
+  // enabled (see main.cpp), which only supports volatile durability; a
   // transient_local publisher fails to even construct in that mode. A late
   // subscriber gets the current state on the next change instead of
   // immediately.
@@ -815,8 +815,8 @@ Snapshotter::~Snapshotter()
   // of Snapshotter (each std::future in it, from std::async(launch::async,
   // ...), blocks in its own destructor until that capture finishes) only
   // guarantees no capture thread is still running once this destructor BODY
-  // returns -- member destruction happens after the body, in reverse
-  // declaration order -- it says nothing about the body itself, which is
+  // returns. Member destruction happens after the body, in reverse
+  // declaration order; it says nothing about the body itself, which is
   // exactly where the loop below runs. Without this explicit wait, a
   // forward capture still mid-wait on its own thread could be iterating
   // buffers_, or reading a queue's sub_, at the same time this loop resets
@@ -1517,7 +1517,7 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // Reject only a second goal for the exact same filename -- two captures
+  // Reject only a second goal for the exact same filename: two captures
   // opening the same staging path concurrently would corrupt each other's
   // output. This is deliberately narrow: it does not limit concurrency
   // across distinct filenames at all, since concurrent captures for
@@ -1535,7 +1535,7 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     active_filenames_.insert(goal->filename);
     ++active_capture_count_;
   }
-  // Called after the lock above is released -- state_lock_ is a
+  // Called after the lock above is released: state_lock_ is a
   // std::shared_mutex, not reentrant; publishState() takes its own lock.
   publishState();
 
@@ -1556,7 +1556,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   auto res = std::make_shared<TriggerSnapAction::Result>();
 
   // Reap any capture futures that have already finished. Just bookkeeping
-  // so this vector doesn't grow unbounded -- the corresponding captures have
+  // so this vector doesn't grow unbounded: the corresponding captures have
   // already run to completion; this call never blocks.
   capture_futures_.erase(
     std::remove_if(
@@ -1621,7 +1621,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
-  // else: left empty here -- createBag() takes the (deferred) clone itself,
+  // else: left empty here. createBag() takes the (deferred) clone itself,
   // once the forward window elapses or the goal is canceled, so it captures
   // everything buffered up to that later point instead of this one.
 
@@ -1681,7 +1681,7 @@ void Snapshotter::createBag(PendingCapture capture)
     }
 
     // Deferred clone: every topic has kept being buffered by topicCb() the
-    // whole time (recording_ permitting), exactly as when idle -- this is
+    // whole time (recording_ permitting), exactly as when idle. This is
     // the same clone handle_accepted takes for an immediate capture, just
     // taken later so it includes what arrived during the wait. Callers
     // using this mode leave req->stop_time at its default (0), and
@@ -1808,8 +1808,8 @@ void Snapshotter::finalizeCapture(
   }
 
   // Where the file actually ends up. Recorded data is never deleted just
-  // because a capture didn't fully complete -- a robot shutting down
-  // mid-recording is exactly this case -- so a canceled capture or a topic
+  // because a capture didn't fully complete (a robot shutting down
+  // mid-recording is exactly this case), so a canceled capture or a topic
   // that failed to write is still saved, at a clearly distinct path from a
   // full success (see partialPathFor()'s own comment for why). Only an
   // actual close() failure leaves the file at its staging path, since its
@@ -2051,7 +2051,7 @@ void Snapshotter::pollTopics()
     }
 
     if (isBuffered(name_type.first)) {
-      // Already buffered, e.g. via a capture profile -- don't double-subscribe
+      // Already buffered, e.g. via a capture profile: don't double-subscribe
       // under all_topics_'s own (potentially different) QoS.
       continue;
     }
@@ -2080,7 +2080,7 @@ void Snapshotter::pollAndResolveTopics()
 {
   // Profile topics resolve first, so a topic a profile wants (with its
   // adapted QoS) is never grabbed first by all_topics_'s generic, non-adaptive
-  // QoS(5) default -- isBuffered() only prevents a double subscription, it
+  // QoS(5) default; isBuffered() only prevents a double subscription, it
   // doesn't pick which side wins the race, so the order here decides that.
   resolvePendingProfileTopics();
   if (options_.all_topics_) {

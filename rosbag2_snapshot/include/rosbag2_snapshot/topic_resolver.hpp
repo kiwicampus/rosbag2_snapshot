@@ -25,7 +25,7 @@ public:
 
   // QoS adapted to what the topic's publishers currently offer (most
   // permissive wins on disagreement) via
-  // rosbag2_transport::Rosbag2QoS::adapt_request_to_offers -- the same rule
+  // rosbag2_transport::Rosbag2QoS::adapt_request_to_offers, the same rule
   // `ros2 bag record` uses, so a BEST_EFFORT publisher (a camera, typically)
   // is actually matched instead of silently buffering nothing. False if
   // there is no publisher yet.

@@ -41,7 +41,7 @@ inline bool isForwardCaptureRequest(double post_duration_s)
 
 // True if a forward request is within the node's configured cap.
 // max_post_duration_s <= 0 means forward captures are disabled entirely (not
-// "unlimited") -- a node must be explicitly opted into this feature.
+// "unlimited"): a node must be explicitly opted into this feature.
 inline bool forwardCaptureWithinLimit(double post_duration_s, double max_post_duration_s)
 {
   return isForwardCaptureRequest(post_duration_s) &&

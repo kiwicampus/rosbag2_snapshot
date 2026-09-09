@@ -2100,7 +2100,8 @@ std::map<std::string, ProfileTopicSpec> Snapshotter::uniqueProfileTopics() const
 }
 
 bool Snapshotter::subscribeResolvedTopic(
-  const std::string & name, const std::string & type, const rclcpp::QoS & qos)
+  const std::string & name, const std::string & type, const rclcpp::QoS & qos,
+  rclcpp::Duration duration_limit, int64_t memory_limit)
 {
   if (isBuffered(name)) {
     return true;  // already buffered via the static topics_ list or another profile
@@ -2111,7 +2112,7 @@ bool Snapshotter::subscribeResolvedTopic(
   details.type = type;
   details.qos = qos;
 
-  SnapshotterTopicOptions topic_options;
+  SnapshotterTopicOptions topic_options(duration_limit, memory_limit);
   fixTopicOptions(topic_options);
   auto queue = std::make_shared<MessageQueue>(topic_options, get_logger(), &total_memory_budget_);
   {
@@ -2147,7 +2148,14 @@ bool Snapshotter::resolveAndSubscribeProfileTopic(const ProfileTopicSpec & spec)
     return false;
   }
 
-  return subscribeResolvedTopic(spec.name, type, qos);
+  const rclcpp::Duration duration_limit = spec.duration_s.has_value() ?
+    rclcpp::Duration::from_seconds(*spec.duration_s) :
+    SnapshotterTopicOptions::INHERIT_DURATION_LIMIT;
+  const int64_t memory_limit = spec.memory_mb.has_value() ?
+    static_cast<int64_t>(*spec.memory_mb * MB_TO_B) :
+    SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT;
+
+  return subscribeResolvedTopic(spec.name, type, qos, duration_limit, memory_limit);
 }
 
 void Snapshotter::subscribeProfileTopics()

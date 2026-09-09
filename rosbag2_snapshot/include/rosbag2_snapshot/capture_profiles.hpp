@@ -5,6 +5,7 @@
 #define ROSBAG2_SNAPSHOT__CAPTURE_PROFILES_HPP_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,13 @@ struct ProfileTopicSpec
   // (the capture-level post_duration_s mode) since this is a per-topic
   // participation switch, not a mode switch.
   bool include_post_trigger = true;
+  // Per-topic override of this topic's own ring window/memory cap, beyond
+  // the node-wide default_duration_limit/default_memory_limit. unset (the
+  // default) means inherit the node-wide value, same as every other topic;
+  // std::optional rather than a 0/-1 sentinel because the engine already
+  // gives both of those meanings elsewhere (INHERIT_*, NO_*_LIMIT).
+  std::optional<double> duration_s;
+  std::optional<double> memory_mb;
 };
 
 struct CaptureProfile

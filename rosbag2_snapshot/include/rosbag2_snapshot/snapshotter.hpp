@@ -436,8 +436,14 @@ private:
   void resolvePendingProfileTopics();
   // Creates the buffer and subscribes a topic whose type/QoS are already
   // known. No-op (returns true) if a topic of this name is already buffered.
+  // duration_limit/memory_limit: per-topic override (from a ProfileTopicSpec's
+  // duration_s/memory_mb); left at the INHERIT_* sentinels, fixTopicOptions()
+  // resolves them to the node-wide default exactly as before this topic had
+  // no way to override them.
   bool subscribeResolvedTopic(
-    const std::string & name, const std::string & type, const rclcpp::QoS & qos);
+    const std::string & name, const std::string & type, const rclcpp::QoS & qos,
+    rclcpp::Duration duration_limit = SnapshotterTopicOptions::INHERIT_DURATION_LIMIT,
+    int64_t memory_limit = SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT);
   // Writes message_queue's messages within req's time window to bag_writer.
   // False (with res.message set) on a bag open/write error. force_throttle:
   // apply each topic's throttle_period regardless of req->throttle_msgs --

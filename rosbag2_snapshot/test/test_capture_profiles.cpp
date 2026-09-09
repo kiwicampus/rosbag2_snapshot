@@ -77,6 +77,51 @@ TEST(CaptureProfiles, IncludePostTriggerFalseIsParsed)
   std::filesystem::remove_all(dir);
 }
 
+TEST(CaptureProfiles, DurationAndMemoryOverridesAreParsed)
+{
+  auto dir = makeEmptyDir("duration_memory");
+  writeFile(
+    dir / "incident.yaml",
+    "topics:\n"
+    "  - name: /camera/image_raw\n"
+    "    duration_s: 45.0\n"
+    "    memory_mb: 128.0\n"
+    "  - name: /odom\n");
+
+  auto result = rosbag2_snapshot::loadProfilesDir(dir.string());
+
+  ASSERT_TRUE(result.ok);
+  const auto * profile = result.profiles.find("incident");
+  ASSERT_NE(profile, nullptr);
+  ASSERT_EQ(profile->topics.size(), 2u);
+  ASSERT_TRUE(profile->topics[0].duration_s.has_value());
+  EXPECT_DOUBLE_EQ(*profile->topics[0].duration_s, 45.0);
+  ASSERT_TRUE(profile->topics[0].memory_mb.has_value());
+  EXPECT_DOUBLE_EQ(*profile->topics[0].memory_mb, 128.0);
+  EXPECT_FALSE(profile->topics[1].duration_s.has_value());
+  EXPECT_FALSE(profile->topics[1].memory_mb.has_value());
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(CaptureProfiles, NonPositiveDurationOrMemoryIsRejected)
+{
+  auto dir = makeEmptyDir("duration_memory_invalid");
+  writeFile(dir / "good.yaml", "topics:\n  - name: /ok\n");
+  writeFile(dir / "bad_duration.yaml", "topics:\n  - name: /x\n    duration_s: -5.0\n");
+  writeFile(dir / "bad_memory.yaml", "topics:\n  - name: /x\n    memory_mb: 0\n");
+
+  auto result = rosbag2_snapshot::loadProfilesDir(dir.string());
+
+  EXPECT_TRUE(result.ok);
+  EXPECT_NE(result.profiles.find("good"), nullptr);
+  EXPECT_EQ(result.profiles.find("bad_duration"), nullptr);
+  EXPECT_EQ(result.profiles.find("bad_memory"), nullptr);
+  EXPECT_EQ(result.warnings.size(), 2u);
+
+  std::filesystem::remove_all(dir);
+}
+
 TEST(CaptureProfiles, SkipsMalformedFileButKeepsOthers)
 {
   auto dir = makeEmptyDir("malformed");

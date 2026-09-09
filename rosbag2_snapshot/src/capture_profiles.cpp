@@ -72,9 +72,23 @@ bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, 
       spec.max_rate_hz = node["max_rate_hz"] ? node["max_rate_hz"].as<double>() : 0.0;
       spec.include_post_trigger =
         node["include_post_trigger"] ? node["include_post_trigger"].as<bool>() : true;
+      if (node["duration_s"]) {
+        spec.duration_s = node["duration_s"].as<double>();
+      }
+      if (node["memory_mb"]) {
+        spec.memory_mb = node["memory_mb"].as<double>();
+      }
 
       if (spec.max_rate_hz < 0.0) {
         error = "max_rate_hz for topic " + spec.name + " must be >= 0";
+        return false;
+      }
+      if (spec.duration_s.has_value() && *spec.duration_s <= 0.0) {
+        error = "duration_s for topic " + spec.name + " must be > 0";
+        return false;
+      }
+      if (spec.memory_mb.has_value() && *spec.memory_mb <= 0.0) {
+        error = "memory_mb for topic " + spec.name + " must be > 0";
         return false;
       }
 

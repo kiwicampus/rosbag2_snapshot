@@ -112,6 +112,13 @@ public:
   void setLogger(rclcpp::Logger logger) { logger_ = logger; }
   void setParameters(rclcpp::Node * node, const std::string ns = "ffmpeg_image_transport.");
   void reset();
+  // Copies only this instance's static config (codec/profile/preset/tune/
+  // qmax/GOP/bitrate/pixel format/frame rate/logger) into a freshly
+  // constructed, unopened FFMPEGEncoder -- no codec context, no pts_/
+  // ptsToStamp_, no re-declaring ROS parameters. Lets each capture of a
+  // topic get its own independent encoder instance without repeating
+  // setParameters() (which would throw on a second declare_parameter()).
+  std::shared_ptr<FFMPEGEncoder> cloneConfig() const;
   // encode image
   void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);
   // ------- performance statistics

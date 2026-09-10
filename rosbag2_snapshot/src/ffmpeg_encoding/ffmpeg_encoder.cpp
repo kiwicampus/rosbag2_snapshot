@@ -100,6 +100,26 @@ void FFMPEGEncoder::setParameters(rclcpp::Node * node, const std::string ns)
     logger_, "qmax: " << qmax_ << " bitrate: " << bitRate_ << " gop: " << GOPSize_);
 }
 
+std::shared_ptr<FFMPEGEncoder> FFMPEGEncoder::cloneConfig() const
+{
+  Lock lock(mutex_);
+  auto clone = std::make_shared<FFMPEGEncoder>();
+  clone->logger_ = logger_;
+  clone->codecName_ = codecName_;
+  clone->profile_ = profile_;
+  clone->preset_ = preset_;
+  clone->tune_ = tune_;
+  clone->delay_ = delay_;
+  clone->qmax_ = qmax_;
+  clone->bitRate_ = bitRate_;
+  clone->GOPSize_ = GOPSize_;
+  clone->pixFormat_ = pixFormat_;
+  clone->timeBase_ = timeBase_;
+  clone->frameRate_ = frameRate_;
+  clone->measurePerformance_ = measurePerformance_;
+  return clone;
+}
+
 bool FFMPEGEncoder::initialize(int width, int height, Callback callback)
 {
   Lock lock(mutex_);

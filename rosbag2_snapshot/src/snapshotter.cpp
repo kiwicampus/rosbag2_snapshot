@@ -1309,11 +1309,11 @@ bool Snapshotter::writeTopic(
   cv_bridge::CvImagePtr cv_bridge_img;
   std::vector<int> compression_params;
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-  // Only one capture ever runs at a time (see handle_goal()), but this
-  // topic's encoder is still shared across every capture of it for the
-  // node's whole lifetime -- reset it once, on this call's first frame, so
-  // this capture's video doesn't continue the previous capture's stream.
-  bool h264_encoder_reset = false;
+  // This call's own encoder, cloned (config only, no codec state) from the
+  // topic's configured template on first use below -- concurrent captures
+  // of this same topic each get an independent codec context/PTS/GOP, so
+  // none of them can corrupt another's stream.
+  std::shared_ptr<FFMPEGEncoder> capture_encoder;
 #endif
   if(topic_details.img_compression_opts_.use_compression)
   {
@@ -1443,20 +1443,19 @@ bool Snapshotter::writeTopic(
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
       if (req->use_h264)
       {
-        auto encoder = topic_details.img_compression_opts_.encoder;
-        if (!h264_encoder_reset) {
-          encoder->reset();
-          h264_encoder_reset = true;
+        if (!capture_encoder) {
+          capture_encoder = topic_details.img_compression_opts_.encoder->cloneConfig();
         }
-        if (!encoder->isInitialized() && !encoder->initialize((int)raw_img.width, (int)raw_img.height))
+        if (!capture_encoder->isInitialized() &&
+          !capture_encoder->initialize((int)raw_img.width, (int)raw_img.height))
         {
           RCLCPP_ERROR(get_logger(), "Couldn't initialize H264 encoder!");
           return false;
         }
 
         foxglove_msgs::msg::CompressedVideo compressed_img;
-        encoder->encodeImage(cv_img, raw_img.header, now());
-        compressed_img = encoder->getCompressedImage();
+        capture_encoder->encodeImage(cv_img, raw_img.header, now());
+        compressed_img = capture_encoder->getCompressedImage();
         compressed_img.timestamp = raw_img.header.stamp;
         bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
       }
@@ -1517,19 +1516,20 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // Reject any second goal while one is already active: two captures
-  // running at once could corrupt each other's H264 encoding (writeTopic()
-  // shares one FFMPEGEncoder per topic, not one per capture), so at most one
-  // capture may ever be in flight, regardless of filename.
+  // Reject only a goal racing to open a filename another capture already
+  // has in flight -- different filenames run concurrently (each opens its
+  // own staging path, clones its own buffers, and writeTopic() clones its
+  // own FFMPEGEncoder per capture, so nothing is shared across captures).
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    if (active_capture_count_ > 0) {
+    if (active_filenames_.count(goal->filename)) {
       RCLCPP_WARN(
         this->get_logger(),
-        "Rejecting request to snapshot '%s': another capture is already "
-        "in flight.", goal->filename.c_str());
+        "Rejecting request to snapshot '%s': a capture to that filename is "
+        "already in flight.", goal->filename.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
+    active_filenames_.insert(goal->filename);
     ++active_capture_count_;
   }
   // Called after the lock above is released: state_lock_ is a
@@ -1600,6 +1600,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     res->message = "Unable to open file for writing, " + std::string(ex.what());
     {
       std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+      active_filenames_.erase(req->filename);
       --active_capture_count_;
       has_last_capture_ = true;
       last_capture_success_ = false;
@@ -1612,8 +1613,20 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   if (!isForwardCaptureRequest(req->post_duration_s)) {
+    const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
+    const bool record_everything =
+      topics_to_write.empty() || topics_to_write.at(0).name.empty();
     std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
     for (const auto& buffer : buffers_) {
+      // Skip cloning a topic this capture will never read from -- most
+      // profiles use only a handful of the buffered topics.
+      if (!record_everything &&
+        std::none_of(
+          topics_to_write.begin(), topics_to_write.end(),
+          [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
+      {
+        continue;
+      }
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
@@ -1637,6 +1650,28 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     std::async(std::launch::async, &Snapshotter::createBag, this, std::move(capture)));
 }
 
+std::vector<DetailsMsg> Snapshotter::resolveTopicsToWrite(
+  const TriggerSnapAction::Goal & req) const
+{
+  if (req.profile.empty()) {
+    return req.topics;
+  }
+  std::vector<DetailsMsg> profile_topics;
+  const CaptureProfile * profile = profiles_.find(req.profile);
+  // handle_goal() already rejected an unknown profile; guard again in case
+  // profiles_ ever changes between goal acceptance and execution.
+  if (profile != nullptr) {
+    for (const auto & spec : profile->topics) {
+      DetailsMsg msg{};
+      msg.name = spec.name;
+      msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
+      msg.include_post_trigger = spec.include_post_trigger ? 1 : 0;
+      profile_topics.push_back(msg);
+    }
+  }
+  return profile_topics;
+}
+
 void Snapshotter::createBag(PendingCapture capture)
 {
   auto goal_handle = capture.goal_handle;
@@ -1651,6 +1686,16 @@ void Snapshotter::createBag(PendingCapture capture)
   bool success = true;
   std::string message = req->filename;
   float count_topics = 0.0;
+
+  // A named profile picks the topic list and each topic's max_rate_hz (as
+  // throttle_period, via the same override mechanism topics[].throttle_period
+  // uses below). An empty profile falls back to req->topics as-is. Resolved
+  // up front (not just for the write loop below) so a forward capture's
+  // deferred clone can also skip topics this goal will never write.
+  const bool use_profile = !req->profile.empty();
+  const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
+  const bool record_everything =
+    topics_to_write.empty() || topics_to_write.at(0).name.empty();
 
   if (isForwardCaptureRequest(req->post_duration_s)) {
     // request_time is kept anchored at goal-acceptance (not recomputed
@@ -1686,32 +1731,19 @@ void Snapshotter::createBag(PendingCapture capture)
     // picks up everything through this point.
     std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
     for (const auto & buffer : buffers_) {
+      // Skip cloning a topic this capture will never read from.
+      if (!record_everything &&
+        std::none_of(
+          topics_to_write.begin(), topics_to_write.end(),
+          [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
+      {
+        continue;
+      }
       cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
   }
 
-  // A named profile picks the topic list and each topic's max_rate_hz (as
-  // throttle_period, via the same override mechanism topics[].throttle_period
-  // uses below). An empty profile falls back to req->topics as-is.
-  bool use_profile = !req->profile.empty();
-  std::vector<DetailsMsg> profile_topics;
-  if (use_profile) {
-    const CaptureProfile * profile = profiles_.find(req->profile);
-    // handle_goal() already rejected an unknown profile; guard again in case
-    // profiles_ ever changes between goal acceptance and execution.
-    if (profile != nullptr) {
-      for (const auto & spec : profile->topics) {
-        DetailsMsg msg{};
-        msg.name = spec.name;
-        msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
-        msg.include_post_trigger = spec.include_post_trigger ? 1 : 0;
-        profile_topics.push_back(msg);
-      }
-    }
-  }
-  const std::vector<DetailsMsg> & topics_to_write = use_profile ? profile_topics : req->topics;
-
-  if (topics_to_write.size() && topics_to_write.at(0).name.size()) {
+  if (!record_everything) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : topics_to_write) {
       if (goal_handle->is_canceling()) {
@@ -1877,6 +1909,7 @@ void Snapshotter::finalizeCapture(
   rclcpp::Time stamp = this->now();
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+    active_filenames_.erase(capture.final_path.string());
     --active_capture_count_;
     has_last_capture_ = true;
     last_capture_success_ = success;

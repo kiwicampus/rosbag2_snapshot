@@ -53,6 +53,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -86,7 +87,11 @@ struct ImageCompressionOptions
   cv::ImwriteFlags imwrite_flag;  // opencv imencode() flag
   int imwrite_flag_value;  // jpg quality (0-100) or png compression level (0-9)
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-  std::shared_ptr<FFMPEGEncoder> encoder;  // video compression, if used
+  // Configured once at startup (setParameters()); never itself used to
+  // encode. Every capture clones its own instance via cloneConfig() so
+  // concurrent captures of this topic each get an independent codec
+  // context/PTS/GOP -- see writeTopic().
+  std::shared_ptr<FFMPEGEncoder> encoder;
 #endif
 };
 
@@ -331,17 +336,21 @@ private:
   mutable std::shared_mutex buffers_lock_;
   // Shared across every MessageQueue in buffers_.
   SharedMemoryBudget total_memory_budget_;
-  // Locks recording_, active_capture_count_ and last_capture_* below.
+  // Locks recording_, active_filenames_, active_capture_count_ and
+  // last_capture_* below.
   std::shared_mutex state_lock_;
   // True if new messages are being written to the internal buffer
   bool recording_;
-  // Captures currently in flight, from goal acceptance (handle_goal) through
-  // full finalization (finalizeCapture): covers bag-open, buffer clone,
-  // write, close and rename, not just active writing. Only ever 0 or 1: a
-  // second goal is rejected outright in handle_goal while one is active, so
-  // at most one capture ever runs at a time (no two captures may open a
-  // staging path -- or run writeTopic()'s H264 encoding, which is not safe
-  // to run concurrently for the same topic -- at once).
+  // Filenames currently in flight, from goal acceptance (handle_goal)
+  // through full finalization (finalizeCapture). Captures of different
+  // filenames run concurrently (each opens its own staging path and clones
+  // its own buffers -- see writeTopic()'s per-capture FFMPEGEncoder clone
+  // for why concurrent H264 encoding of the same topic is also safe); this
+  // set only guards against two goals racing to open the same destination.
+  std::set<std::string> active_filenames_;
+  // Captures currently in flight, of any filename. Reported on
+  // SnapshotState.active_capture_count; enableCb() also reads it to refuse
+  // pausing while anything is recording.
   uint32_t active_capture_count_ = 0;
   // Outcome of the most recently *finished* capture (of any filename) --
   // a non-authoritative rollup for status reporting; the authoritative
@@ -454,6 +463,15 @@ private:
 
   ImageCompressionOptions getCompressionOptions(std::string topic);
 
+  // Resolves which topics a goal will actually write: a named req->profile
+  // wins (each entry gets that profile's own throttle/inclusion overrides),
+  // otherwise req->topics as-is. Empty means "every buffered topic" (the
+  // record-everything fallback in createBag()). Used both to filter which
+  // buffers_ entries handle_accepted()/createBag() bother cloning, and by
+  // createBag() itself to decide what to write.
+  std::vector<DetailsMsg> resolveTopicsToWrite(
+    const TriggerSnapAction::Goal & req) const;
+
   // Everything a capture's worker task needs, so it can be threaded through
   // std::async without an ever-growing argument list.
   struct PendingCapture
@@ -477,8 +495,9 @@ private:
   // Closes the bag writer (best-effort, even on failure/cancel so the
   // staging file is left well-formed) and, only if still successful,
   // atomically renames staging_path to final_path. Updates
-  // result->success/message, active_capture_count_/last_capture_* state,
-  // and publishes the capture-completed event plus a refreshed state.
+  // result->success/message, active_filenames_/active_capture_count_/
+  // last_capture_* state, and publishes the capture-completed event plus a
+  // refreshed state.
   void finalizeCapture(
     PendingCapture & capture, bool success, std::string message,
     const std::shared_ptr<TriggerSnapAction::Result> & result,

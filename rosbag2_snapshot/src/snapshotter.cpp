@@ -1612,42 +1612,71 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   }
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
-  if (!isForwardCaptureRequest(req->post_duration_s)) {
-    const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
-    const bool record_everything =
-      topics_to_write.empty() || topics_to_write.at(0).name.empty();
-    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
-    for (const auto& buffer : buffers_) {
-      // Skip cloning a topic this capture will never read from -- most
-      // profiles use only a handful of the buffered topics.
-      if (!record_everything &&
-        std::none_of(
-          topics_to_write.begin(), topics_to_write.end(),
-          [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
-      {
-        continue;
+  try {
+    if (!isForwardCaptureRequest(req->post_duration_s)) {
+      const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
+      const bool record_everything =
+        topics_to_write.empty() || topics_to_write.at(0).name.empty();
+      std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
+      for (const auto& buffer : buffers_) {
+        // Skip cloning a topic this capture will never read from -- most
+        // profiles use only a handful of the buffered topics.
+        if (!record_everything &&
+          std::none_of(
+            topics_to_write.begin(), topics_to_write.end(),
+            [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
+        {
+          continue;
+        }
+        cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
       }
-      cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
     }
+    // else: left empty here. createBag() takes the (deferred) clone itself,
+    // once the forward window elapses or the goal is canceled, so it captures
+    // everything buffered up to that later point instead of this one.
+
+    PendingCapture capture;
+    capture.goal_handle = goal_handle;
+    capture.cloned_buffers = std::move(cloned_buffers);
+    capture.bag_writer_ptr = bag_writer_ptr;
+    capture.staging_path = staging_path;
+    capture.final_path = final_path;
+    capture.profile = req->profile;
+    capture.flat_output = req->use_flat_output;
+
+    // std::async(launch::async, ...) instead of a detached thread: the
+    // returned future is kept in capture_futures_ so ~Snapshotter() can wait
+    // for it (see the comment on capture_futures_ in snapshotter.hpp).
+    capture_futures_.push_back(
+      std::async(std::launch::async, &Snapshotter::createBag, this, std::move(capture)));
+  } catch (const std::exception & ex) {
+    // Cloning a buffer (bad_alloc) or std::async itself (thread-creation
+    // exhaustion under a burst of concurrent goals) can throw here, same
+    // uncaught-leak risk as inside createBag() -- see the try/catch there.
+    RCLCPP_ERROR(
+      get_logger(), "Failed to start capture for %s: %s",
+      staging_path.string().c_str(), ex.what());
+    try {
+      bag_writer_ptr->close();
+    } catch (const std::exception &) {
+      // Best-effort: the staging file may be left incomplete, same as any
+      // other unclean shutdown -- the next startup's leftover-.tmp sweep
+      // covers it.
+    }
+    res->success = false;
+    res->message = "Unable to start capture, " + std::string(ex.what());
+    {
+      std::unique_lock<std::shared_mutex> write_lock(state_lock_);
+      active_filenames_.erase(req->filename);
+      --active_capture_count_;
+      has_last_capture_ = true;
+      last_capture_success_ = false;
+      last_capture_message_ = res->message;
+      last_capture_stamp_ = this->now();
+    }
+    publishState();
+    return goal_handle->abort(res);
   }
-  // else: left empty here. createBag() takes the (deferred) clone itself,
-  // once the forward window elapses or the goal is canceled, so it captures
-  // everything buffered up to that later point instead of this one.
-
-  PendingCapture capture;
-  capture.goal_handle = goal_handle;
-  capture.cloned_buffers = std::move(cloned_buffers);
-  capture.bag_writer_ptr = bag_writer_ptr;
-  capture.staging_path = staging_path;
-  capture.final_path = final_path;
-  capture.profile = req->profile;
-  capture.flat_output = req->use_flat_output;
-
-  // std::async(launch::async, ...) instead of a detached thread: the
-  // returned future is kept in capture_futures_ so ~Snapshotter() can wait
-  // for it (see the comment on capture_futures_ in snapshotter.hpp).
-  capture_futures_.push_back(
-    std::async(std::launch::async, &Snapshotter::createBag, this, std::move(capture)));
 }
 
 std::vector<DetailsMsg> Snapshotter::resolveTopicsToWrite(
@@ -1686,6 +1715,12 @@ void Snapshotter::createBag(PendingCapture capture)
   bool success = true;
   std::string message = req->filename;
   float count_topics = 0.0;
+  // Set right before every finalizeCapture() call below, so a crash caught
+  // by the try/catch at the bottom never finalizes (and decrements
+  // active_capture_count_/erases active_filenames_) a second time.
+  bool finalized = false;
+
+  try {
 
   // A named profile picks the topic list and each topic's max_rate_hz (as
   // throttle_period, via the same override mechanism topics[].throttle_period
@@ -1707,6 +1742,7 @@ void Snapshotter::createBag(PendingCapture capture)
       request_time + rclcpp::Duration::from_seconds(req->post_duration_s);
     while (this->now() < deadline) {
       if (goal_handle->is_canceling()) {
+        finalized = true;
         finalizeCapture(
           capture, false, "Canceled while waiting for forward capture window",
           result, 0, request_time);
@@ -1747,6 +1783,7 @@ void Snapshotter::createBag(PendingCapture capture)
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : topics_to_write) {
       if (goal_handle->is_canceling()) {
+        finalized = true;
         finalizeCapture(
           capture, false, "Rosbag creation canceled", result,
           static_cast<size_t>(count_topics), request_time);
@@ -1789,6 +1826,7 @@ void Snapshotter::createBag(PendingCapture capture)
   } else {  // Empty topic list: record every buffered topic.
     for (const auto & pair : cloned_buffers) {
       if (goal_handle->is_canceling()) {
+        finalized = true;
         finalizeCapture(
           capture, false, "Rosbag creation canceled", result,
           static_cast<size_t>(count_topics), request_time);
@@ -1810,10 +1848,48 @@ void Snapshotter::createBag(PendingCapture capture)
     }
   }
   
+  finalized = true;
   finalizeCapture(capture, success, message, result, static_cast<size_t>(count_topics), request_time);
   // Action status is always "succeeded" here; a failed capture is reported
   // through result->success/message instead, not through the action outcome.
   goal_handle->succeed(result);
+
+  } catch (const std::exception & ex) {
+    // Anything above (deserializing a malformed frame, cv_bridge/OpenCV on a
+    // bad image, disk-full during write, etc.) previously unwound out of this
+    // std::async task uncaught: capture_futures_ is only ever wait()'d, never
+    // get()'d, so the exception was silently dropped and finalizeCapture()
+    // never ran -- permanently leaking this filename's active_filenames_
+    // entry and active_capture_count_ (which also wedges enableCb()'s pause
+    // path node-wide).
+    if (!finalized) {
+      const std::string crash_message = std::string("capture crashed: ") + ex.what();
+      RCLCPP_ERROR(get_logger(), "%s", crash_message.c_str());
+      finalizeCapture(
+        capture, false, crash_message, result, static_cast<size_t>(count_topics), request_time);
+      if (goal_handle->is_canceling()) {
+        goal_handle->canceled(result);
+      } else {
+        goal_handle->succeed(result);
+      }
+    } else {
+      RCLCPP_ERROR(get_logger(), "capture crashed after already finalizing: %s", ex.what());
+    }
+  } catch (...) {
+    if (!finalized) {
+      const std::string crash_message = "capture crashed with an unknown error";
+      RCLCPP_ERROR(get_logger(), "%s", crash_message.c_str());
+      finalizeCapture(
+        capture, false, crash_message, result, static_cast<size_t>(count_topics), request_time);
+      if (goal_handle->is_canceling()) {
+        goal_handle->canceled(result);
+      } else {
+        goal_handle->succeed(result);
+      }
+    } else {
+      RCLCPP_ERROR(get_logger(), "capture crashed with an unknown error after already finalizing");
+    }
+  }
 }
 
 void Snapshotter::finalizeCapture(

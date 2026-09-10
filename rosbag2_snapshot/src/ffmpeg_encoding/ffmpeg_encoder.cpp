@@ -33,6 +33,10 @@ void FFMPEGEncoder::reset()
 {
   Lock lock(mutex_);
   closeCodec();
+  // So the next initialize() starts a genuinely independent stream: no
+  // carried-over PTS/GOP state from whatever this encoder last encoded.
+  pts_ = 0;
+  ptsToStamp_.clear();
 }
 
 static void free_frame(AVFrame ** frame)
@@ -327,24 +331,25 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
     tdiffReceivePacket_.update((t1 - t0).seconds());
   }
   const AVPacket & pk = *packet_;
-  if (ret == 0 && pk.size > 0) {
-    // Only format, data, frame_id and timestamp are populated: rosbag2_snapshot
-    // fetches this packet via getCompressedImage() rather than through callback_.
-    CompressedVideo * packet = new CompressedVideo;
-    pptr_ = CompressedVideoConstPtr(packet);
-    packet->data.resize(pk.size);
-    packet->format = "h264";
-    memcpy(&(packet->data[0]), pk.data, pk.size);
-    packet->frame_id = header.frame_id;
-    auto it = ptsToStamp_.find(pk.pts);
-    if (it != ptsToStamp_.end()) {
-      packet->timestamp = it->second;
-      ptsToStamp_.erase(it);
-    } else {
-      RCLCPP_ERROR_STREAM(logger_, "pts " << pk.pts << " has no time stamp!");
-    }
-    av_packet_unref(packet_);  // free packet allocated by encoder
+  if (ret != 0 || pk.size <= 0) {
+    return (ret);
   }
+  // Only format, data, frame_id and timestamp are populated: rosbag2_snapshot
+  // fetches this packet via getCompressedImage() rather than through callback_.
+  CompressedVideo * packet = new CompressedVideo;
+  pptr_ = CompressedVideoConstPtr(packet);
+  packet->data.resize(pk.size);
+  packet->format = "h264";
+  memcpy(&(packet->data[0]), pk.data, pk.size);
+  packet->frame_id = header.frame_id;
+  auto it = ptsToStamp_.find(pk.pts);
+  if (it != ptsToStamp_.end()) {
+    packet->timestamp = it->second;
+    ptsToStamp_.erase(it);
+  } else {
+    RCLCPP_ERROR_STREAM(logger_, "pts " << pk.pts << " has no time stamp!");
+  }
+  av_packet_unref(packet_);  // free packet allocated by encoder
   return (ret);
 }
 

@@ -53,7 +53,6 @@
 #include <future>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -332,24 +331,18 @@ private:
   mutable std::shared_mutex buffers_lock_;
   // Shared across every MessageQueue in buffers_.
   SharedMemoryBudget total_memory_budget_;
-  // Locks recording_, active_capture_count_, active_filenames_ and
-  // last_capture_* below.
+  // Locks recording_, active_capture_count_ and last_capture_* below.
   std::shared_mutex state_lock_;
   // True if new messages are being written to the internal buffer
   bool recording_;
   // Captures currently in flight, from goal acceptance (handle_goal) through
   // full finalization (finalizeCapture): covers bag-open, buffer clone,
-  // write, close and rename, not just active writing. A count rather than a
-  // single-slot flag: concurrent captures of different filenames are a real,
-  // relied-upon usage pattern (a client may track several simultaneous
-  // TriggerSnapshot goals itself).
+  // write, close and rename, not just active writing. Only ever 0 or 1: a
+  // second goal is rejected outright in handle_goal while one is active, so
+  // at most one capture ever runs at a time (no two captures may open a
+  // staging path -- or run writeTopic()'s H264 encoding, which is not safe
+  // to run concurrently for the same topic -- at once).
   uint32_t active_capture_count_ = 0;
-  // Filenames currently being written. The only concurrency-related
-  // admission check this class makes: a second goal for a filename already
-  // in this set is rejected in handle_goal, since two captures opening the
-  // same staging path concurrently would corrupt each other's output. Goals
-  // for distinct filenames are never limited by this.
-  std::set<std::string> active_filenames_;
   // Outcome of the most recently *finished* capture (of any filename) --
   // a non-authoritative rollup for status reporting; the authoritative
   // per-capture record is the SnapshotCaptureEvent published by
@@ -484,9 +477,8 @@ private:
   // Closes the bag writer (best-effort, even on failure/cancel so the
   // staging file is left well-formed) and, only if still successful,
   // atomically renames staging_path to final_path. Updates
-  // result->success/message, active_capture_count_/active_filenames_/
-  // last_capture_* state, and publishes the capture-completed event plus a
-  // refreshed state.
+  // result->success/message, active_capture_count_/last_capture_* state,
+  // and publishes the capture-completed event plus a refreshed state.
   void finalizeCapture(
     PendingCapture & capture, bool success, std::string message,
     const std::shared_ptr<TriggerSnapAction::Result> & result,

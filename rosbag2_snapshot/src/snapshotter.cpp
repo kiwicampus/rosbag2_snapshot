@@ -524,19 +524,16 @@ void MessageQueue::clear()
 
 void MessageQueue::_clear()
 {
-  if(options_.duration_limit_.seconds() > 0.0)
-  {
-    try {
-      queue_.clear();
-      size_ = 0;
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(logger_, "Exception during queue clear: %s", e.what());
-      size_ = 0;
-    }
-  }
-  else
-  {
+  if (options_.duration_limit_.seconds() <= 0.0) {
     RCLCPP_INFO(logger_, "Not clearing queue for topic %s because duration is set to %f", sub_->get_topic_name(), options_.duration_limit_.seconds());
+    return;
+  }
+  try {
+    queue_.clear();
+    size_ = 0;
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(logger_, "Exception during queue clear: %s", e.what());
+    size_ = 0;
   }
 }
 
@@ -840,12 +837,10 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
   try {
     bool use_compression = declare_parameter<bool>(prefix + ".compression.enabled");
     img_compression_opts.use_compression = use_compression;
-  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-    if (std::string{ex.what()}.find("not set") == std::string::npos) {
-      RCLCPP_INFO(get_logger(), "Not using image compression for topic %s", topic.c_str());
-      img_compression_opts.use_compression = false;
-      return img_compression_opts;
-    } else { throw ex; }
+  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+    RCLCPP_INFO(get_logger(), "Not using image compression for topic %s", topic.c_str());
+    img_compression_opts.use_compression = false;
+    return img_compression_opts;
   }
 
   if(img_compression_opts.use_compression)
@@ -853,14 +848,12 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
     try {
       std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
       img_compression_opts.format = compression_format;
-    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-      if (std::string{ex.what()}.find("not set") == std::string::npos) {
-        RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
-        img_compression_opts.format = "jpg";
-        img_compression_opts.imwrite_flag_value = 95;
-        img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
-        return img_compression_opts;
-      } else { throw ex; }
+    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+      RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
+      img_compression_opts.format = "jpg";
+      img_compression_opts.imwrite_flag_value = 95;
+      img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+      return img_compression_opts;
     }
 
     if(img_compression_opts.format == "jpg" || img_compression_opts.format == "jpeg")
@@ -870,11 +863,9 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
       try{
         int jpg_quality = declare_parameter<int>(prefix + ".compression.jpg_quality");
         img_compression_opts.imwrite_flag_value = jpg_quality;
-      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-        if (std::string{ex.what()}.find("not set") == std::string::npos) {
-          RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
-          img_compression_opts.imwrite_flag_value = 95;
-        } else { throw ex; }
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+        RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
+        img_compression_opts.imwrite_flag_value = 95;
       }
     }
     else if(img_compression_opts.format == "png")
@@ -883,11 +874,9 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
       try{
         int png_compression_level = declare_parameter<int>(prefix + ".compression.png_compression");
         img_compression_opts.imwrite_flag_value = png_compression_level;
-      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException& ex) {
-        if (std::string{ex.what()}.find("not set") == std::string::npos) {
-          RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using png with default compression", topic.c_str());
-          img_compression_opts.imwrite_flag_value = 3;
-        } else { throw ex; }
+      } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+        RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using png with default compression", topic.c_str());
+        img_compression_opts.imwrite_flag_value = 3;
       }
     }
     else
@@ -1318,7 +1307,14 @@ bool Snapshotter::writeTopic(
 
   rclcpp::Serialization<sensor_msgs::msg::Image> img_serializer;
   cv_bridge::CvImagePtr cv_bridge_img;
-  std::vector<int> compression_params; 
+  std::vector<int> compression_params;
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
+  // Only one capture ever runs at a time (see handle_goal()), but this
+  // topic's encoder is still shared across every capture of it for the
+  // node's whole lifetime -- reset it once, on this call's first frame, so
+  // this capture's video doesn't continue the previous capture's stream.
+  bool h264_encoder_reset = false;
+#endif
   if(topic_details.img_compression_opts_.use_compression)
   {
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
@@ -1448,6 +1444,10 @@ bool Snapshotter::writeTopic(
       if (req->use_h264)
       {
         auto encoder = topic_details.img_compression_opts_.encoder;
+        if (!h264_encoder_reset) {
+          encoder->reset();
+          h264_encoder_reset = true;
+        }
         if (!encoder->isInitialized() && !encoder->initialize((int)raw_img.width, (int)raw_img.height))
         {
           RCLCPP_ERROR(get_logger(), "Couldn't initialize H264 encoder!");
@@ -1517,22 +1517,19 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // Reject only a second goal for the exact same filename: two captures
-  // opening the same staging path concurrently would corrupt each other's
-  // output. This is deliberately narrow: it does not limit concurrency
-  // across distinct filenames at all, since concurrent captures for
-  // different events are a real, relied-upon usage pattern (a client may
-  // track multiple simultaneous goals itself).
+  // Reject any second goal while one is already active: two captures
+  // running at once could corrupt each other's H264 encoding (writeTopic()
+  // shares one FFMPEGEncoder per topic, not one per capture), so at most one
+  // capture may ever be in flight, regardless of filename.
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
-    if (active_filenames_.count(goal->filename)) {
+    if (active_capture_count_ > 0) {
       RCLCPP_WARN(
         this->get_logger(),
-        "Rejecting request to snapshot: '%s' is already being written by "
-        "another in-flight capture.", goal->filename.c_str());
+        "Rejecting request to snapshot '%s': another capture is already "
+        "in flight.", goal->filename.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
-    active_filenames_.insert(goal->filename);
     ++active_capture_count_;
   }
   // Called after the lock above is released: state_lock_ is a
@@ -1604,7 +1601,6 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     {
       std::unique_lock<std::shared_mutex> write_lock(state_lock_);
       --active_capture_count_;
-      active_filenames_.erase(req->filename);
       has_last_capture_ = true;
       last_capture_success_ = false;
       last_capture_message_ = res->message;
@@ -1882,7 +1878,6 @@ void Snapshotter::finalizeCapture(
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     --active_capture_count_;
-    active_filenames_.erase(capture.final_path.string());
     has_last_capture_ = true;
     last_capture_success_ = success;
     last_capture_message_ = message;

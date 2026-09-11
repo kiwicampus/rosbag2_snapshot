@@ -1732,6 +1732,15 @@ void Snapshotter::createBag(PendingCapture capture)
   const bool record_everything =
     topics_to_write.empty() || topics_to_write.at(0).name.empty();
 
+  // Set when the forward wait below is cut short by a cancel: it still runs
+  // the deferred clone and the write loop that follow, using whatever was
+  // buffered up to that point, instead of discarding it. The write loops'
+  // own is_canceling() checks are skipped once this is true -- cancellation
+  // is a one-shot, latched signal, so honoring it here (by writing the
+  // partial buffer) is the only handling it gets; re-checking it again a few
+  // lines later would just discard the very data we kept it around for.
+  bool canceled_during_forward_wait = false;
+
   if (isForwardCaptureRequest(req->post_duration_s)) {
     // request_time is kept anchored at goal-acceptance (not recomputed
     // after the wait below): it's also the reference instant for
@@ -1742,12 +1751,16 @@ void Snapshotter::createBag(PendingCapture capture)
       request_time + rclcpp::Duration::from_seconds(req->post_duration_s);
     while (this->now() < deadline) {
       if (goal_handle->is_canceling()) {
-        finalized = true;
-        finalizeCapture(
-          capture, false, "Canceled while waiting for forward capture window",
-          result, 0, request_time);
-        goal_handle->canceled(result);
-        return;
+        // Do not finalize here: falling through still runs the deferred
+        // clone and the write loop below with whatever topicCb() buffered
+        // during the (cut-short) wait, so a capture stopped early -- the
+        // normal way a ring+post_duration_s profile like "conversation" ends,
+        // via stop_capture well before its post_duration_s cap -- keeps its
+        // data instead of finalizing an empty bag.
+        canceled_during_forward_wait = true;
+        success = false;
+        message = "Canceled while waiting for forward capture window";
+        break;
       }
       feedback->duration = (this->now() - request_time).seconds();
       feedback->progress = 100.0f * std::min(
@@ -1782,7 +1795,7 @@ void Snapshotter::createBag(PendingCapture capture)
   if (!record_everything) {
     if (req->use_interval_mode) RCLCPP_WARN(get_logger(), "[INTERVAL_MODE]: enabled for snapshotting");
     for (auto & topic : topics_to_write) {
-      if (goal_handle->is_canceling()) {
+      if (goal_handle->is_canceling() && !canceled_during_forward_wait) {
         finalized = true;
         finalizeCapture(
           capture, false, "Rosbag creation canceled", result,
@@ -1825,7 +1838,7 @@ void Snapshotter::createBag(PendingCapture capture)
     }
   } else {  // Empty topic list: record every buffered topic.
     for (const auto & pair : cloned_buffers) {
-      if (goal_handle->is_canceling()) {
+      if (goal_handle->is_canceling() && !canceled_during_forward_wait) {
         finalized = true;
         finalizeCapture(
           capture, false, "Rosbag creation canceled", result,

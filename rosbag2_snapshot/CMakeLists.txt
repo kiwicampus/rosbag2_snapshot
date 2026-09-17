@@ -28,6 +28,8 @@ find_package(ffmpeg_image_transport_msgs REQUIRED)
 find_package(foxglove_msgs REQUIRED)
 find_package(usr_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(cloudini_lib REQUIRED)
+find_package(point_cloud_interfaces REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
@@ -59,6 +61,7 @@ set(DEPENDENCIES
   foxglove_msgs
   usr_msgs
   visualization_msgs
+  point_cloud_interfaces
 )
 
 set(executable_name snapshotter)
@@ -86,6 +89,7 @@ add_executable(${executable_name}
 target_link_libraries( ${library_name}
   PkgConfig::LIBAV
   encoder
+  cloudini_lib::cloudini_lib
 )
 
 ament_target_dependencies(${library_name}

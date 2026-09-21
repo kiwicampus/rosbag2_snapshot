@@ -535,6 +535,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.queue_depth = pair.first.queue_depth;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
+    details.pc_compression_opts_ = pair.first.pc_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
     details.h264_throttle_skip = pair.first.h264_throttle_skip;
     std::pair<buffers_t::iterator, bool> res =

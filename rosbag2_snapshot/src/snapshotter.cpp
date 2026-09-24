@@ -1337,8 +1337,8 @@ bool Snapshotter::writeTopic(
   // none of them can corrupt another's stream.
   std::shared_ptr<FFMPEGEncoder> capture_encoder;
 #endif
-  const bool compress = topic_details.img_compression_opts_.use_compression &&
-    (topic_details.type.empty() || topic_details.type == "sensor_msgs/msg/Image");
+  const bool compress =
+    compressesTopicType(topic_details.img_compression_opts_.use_compression, topic_details.type);
   if (topic_details.img_compression_opts_.use_compression && !compress) {
     RCLCPP_WARN(
       get_logger(), "Topic %s is %s, not an image; recording it uncompressed",
@@ -1425,9 +1425,9 @@ bool Snapshotter::writeTopic(
   const bool stop_time_specified = builtin_time_nonzero(req->stop_time);
   // With no stop_time (a forward capture) the window ends at request_time, so
   // only messages older than start_time count as old.
-  const rclcpp::Duration bag_duration = stop_time_specified ?
-    rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time) :
-    request_time - rclcpp::Time(req->start_time);
+  const rclcpp::Duration bag_duration(std::chrono::nanoseconds(overrideWindowNs(
+      stop_time_specified, rclcpp::Time(req->start_time).nanoseconds(),
+      rclcpp::Time(req->stop_time).nanoseconds(), request_time.nanoseconds())));
   bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -1745,32 +1745,7 @@ std::vector<DetailsMsg> Snapshotter::resolveTopicsToWrite(
   // profiles_ ever changes between goal acceptance and execution.
   if (profile != nullptr) {
     for (const auto & spec : profile->topics) {
-      DetailsMsg msg{};
-      msg.name = spec.name;
-      msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
-      msg.include_post_trigger = spec.include_post_trigger ? 1 : 0;
-      if (spec.compression == "none") {
-        msg.use_compression = 0;
-      } else if (!spec.compression.empty()) {
-        msg.use_compression = 1;
-        msg.format = spec.compression;
-        if (spec.compression == "jpg") {
-          msg.jpg_quality = spec.compression_quality.value_or(95);
-        } else if (spec.compression == "png") {
-          msg.png_compression = spec.compression_quality.value_or(3);
-        }
-      }
-      if (spec.override_old_timestamps.has_value()) {
-        msg.override_old_timestamps = *spec.override_old_timestamps ? 1 : 0;
-      }
-      if (spec.queue_depth.has_value()) {msg.queue_depth = *spec.queue_depth;}
-      if (spec.old_messages_to_keep.has_value()) {
-        msg.old_messages_to_keep = *spec.old_messages_to_keep;
-      }
-      if (spec.h264_throttle_skip.has_value()) {
-        msg.h264_throttle_skip = *spec.h264_throttle_skip ? 1 : 0;
-      }
-      profile_topics.push_back(msg);
+      profile_topics.push_back(profileTopicDetails(spec));
     }
   }
   return profile_topics;

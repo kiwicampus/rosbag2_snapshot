@@ -175,6 +175,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_accepted_filename PRIVATE include)
 
+  ament_add_gtest(test_profile_topic_details
+    test/test_profile_topic_details.cpp
+  )
+  target_include_directories(test_profile_topic_details PRIVATE include)
+  ament_target_dependencies(test_profile_topic_details rosbag2_snapshot_msgs)
+
   ament_add_gtest(test_forward_follow
     test/test_forward_follow.cpp
   )

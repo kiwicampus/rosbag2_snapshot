@@ -66,6 +66,7 @@
 #include "rosbag2_snapshot/accepted_filename.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/forward_capture.hpp"
+#include "rosbag2_snapshot/profile_topic_details.hpp"
 #include "rosbag2_snapshot/shared_memory_budget.hpp"
 #include "rosbag2_snapshot/staging_path.hpp"
 #include "rosbag2_snapshot/topic_resolver.hpp"

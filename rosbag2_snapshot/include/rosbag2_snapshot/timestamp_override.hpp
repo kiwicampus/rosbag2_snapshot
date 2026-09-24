@@ -65,6 +65,15 @@ inline bool shouldOverrideOldTimestamp(
   return message_age_ns > bag_duration_ns;
 }
 
+// The bag_duration_ns shouldOverrideOldTimestamp() compares against: the
+// requested window, or up to request_ns when no stop time was given (a
+// forward capture), so only messages older than start count as old.
+inline int64_t overrideWindowNs(
+  bool stop_time_specified, int64_t start_ns, int64_t stop_ns, int64_t request_ns)
+{
+  return (stop_time_specified ? stop_ns : request_ns) - start_ns;
+}
+
 }  // namespace rosbag2_snapshot
 
 #endif  // ROSBAG2_SNAPSHOT__TIMESTAMP_OVERRIDE_HPP_

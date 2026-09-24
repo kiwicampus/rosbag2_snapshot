@@ -55,3 +55,20 @@ TEST(TimestampOverride, MessageExactlyAtTheWindowBoundaryIsNotOverridden)
   EXPECT_FALSE(rosbag2_snapshot::shouldOverrideOldTimestamp(
     true, 0, true, true, 50, 50));
 }
+
+TEST(TimestampOverride, WindowIsTheRequestedOneWhenStopIsGiven)
+{
+  EXPECT_EQ(rosbag2_snapshot::overrideWindowNs(true, 100, 150, 900), 50);
+}
+
+TEST(TimestampOverride, ForwardWindowRunsToTheRequestWithoutAStop)
+{
+  EXPECT_EQ(rosbag2_snapshot::overrideWindowNs(false, 100, 0, 900), 800);
+  // A message received after start is then never older than the window.
+  EXPECT_FALSE(rosbag2_snapshot::shouldOverrideOldTimestamp(
+      true, -1, true, false, 900 - 200,
+      rosbag2_snapshot::overrideWindowNs(false, 100, 0, 900)));
+  EXPECT_TRUE(rosbag2_snapshot::shouldOverrideOldTimestamp(
+      true, -1, true, false, 900 - 50,
+      rosbag2_snapshot::overrideWindowNs(false, 100, 0, 900)));
+}

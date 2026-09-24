@@ -108,7 +108,7 @@ If a capture is canceled or a topic fails mid-write, the bag is still saved (nev
 
 ### Forward (live) captures
 
-By default a goal writes immediately from whatever's already buffered. Setting `post_duration_s` (float, seconds) turns it into a forward/live capture: writing is deferred until that many seconds after the goal is accepted, so the bag also includes messages that arrive after the trigger. Every buffered topic keeps being buffered by its normal subscription throughout; nothing new is subscribed, so the topic's `duration_limit`/`memory_limit` must be large enough to span from `start_time` through `trigger_time + post_duration_s`.
+By default a goal writes immediately from whatever's already buffered. Setting `post_duration_s` (float, seconds) turns it into a forward/live capture: writing is deferred until that many seconds after the goal is accepted, so the bag also includes messages that arrive after the trigger. The buffers are copied when the goal is accepted, and each copy keeps receiving new messages until the wait ends, so a topic's `duration_limit`/`memory_limit` only has to cover the pre-trigger window. A topic with `include_post_trigger: false` gets only the copy taken at acceptance. The post-trigger messages are held outside `default_memory_limit`/`total_memory_limit` until the bag is written.
 
 Canceling the goal (e.g. Ctrl-C on `ros2 action send_goal`, or `cancel_goal_async()`) ends the wait early and finalizes the bag with whatever was buffered so far; there's no separate "stop" call.
 

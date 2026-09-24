@@ -266,6 +266,8 @@ private:
   std::shared_ptr<rclcpp::GenericSubscription> sub_;
   // Not owned; null for a clone() (never pushed to).
   SharedMemoryBudget * shared_budget_{nullptr};
+  // Forward-capture clones that receive every message this queue stores.
+  std::vector<std::shared_ptr<MessageQueue>> followers_;
 
 public:
   explicit MessageQueue(
@@ -292,6 +294,10 @@ public:
   // Deep-copies the queue and its state (used to snapshot a buffer for writing
   // without blocking new messages from arriving on the live queue).
   std::shared_ptr<MessageQueue> clone();
+  // clone(), plus every message stored from now on until unfollow(), with no
+  // duration or memory trimming. Atomic, so nothing is missed or duplicated.
+  std::shared_ptr<MessageQueue> cloneAndFollow();
+  void unfollow(const std::shared_ptr<MessageQueue> & follower);
   // Bytes currently held, for cross-queue eviction comparisons.
   int64_t usedBytes() const
   {
@@ -474,10 +480,27 @@ private:
 
   // Everything a capture's worker task needs, so it can be threaded through
   // std::async without an ever-growing argument list.
+  // Detaches a forward capture's clones from the live queues on destruction.
+  struct ForwardFollow
+  {
+    std::vector<std::pair<std::shared_ptr<MessageQueue>, std::shared_ptr<MessageQueue>>> links;
+    ForwardFollow() = default;
+    ForwardFollow(const ForwardFollow &) = delete;
+    ForwardFollow & operator=(const ForwardFollow &) = delete;
+    ~ForwardFollow()
+    {
+      for (auto & link : links) {
+        link.first->unfollow(link.second);
+      }
+    }
+  };
+
   struct PendingCapture
   {
     std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle;
     std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
+    // Set for a forward capture: its cloned_buffers keep growing until reset.
+    std::unique_ptr<ForwardFollow> follow;
     std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
     // Same directory as final_path (guarantees an atomic same-filesystem
     // rename), e.g. "<final_path>.tmp".

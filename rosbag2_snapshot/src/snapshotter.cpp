@@ -516,6 +516,23 @@ std::shared_ptr<MessageQueue> MessageQueue::clone()
   return cloned;
 }
 
+std::shared_ptr<MessageQueue> MessageQueue::cloneAndFollow()
+{
+  std::lock_guard<std::mutex> l(lock);
+  auto cloned = std::make_shared<MessageQueue>(this->options_, this->logger_);
+  cloned->queue_ = this->queue_;
+  cloned->size_ = this->size_;
+  followers_.push_back(cloned);
+  return cloned;
+}
+
+void MessageQueue::unfollow(const std::shared_ptr<MessageQueue> & follower)
+{
+  std::lock_guard<std::mutex> l(lock);
+  followers_.erase(
+    std::remove(followers_.begin(), followers_.end(), follower), followers_.end());
+}
+
 void MessageQueue::clear()
 {
   std::lock_guard<std::mutex> l(lock);
@@ -645,6 +662,11 @@ MessageQueuePushResult MessageQueue::_push(SnapshotMessage const & _out)
   size_ += added;
   if (shared_budget_ != nullptr) {
     shared_budget_->add(added);
+  }
+  for (auto & follower : followers_) {
+    std::lock_guard<std::mutex> fl(follower->lock);
+    follower->queue_.push_back(_out);
+    follower->size_ += added;
   }
   return MessageQueuePushResult::STORED;
 }
@@ -1613,29 +1635,39 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
 
   std::vector<std::pair<TopicDetails, std::shared_ptr<MessageQueue>>> cloned_buffers;
   try {
-    if (!isForwardCaptureRequest(req->post_duration_s)) {
-      const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
-      const bool record_everything =
-        topics_to_write.empty() || topics_to_write.at(0).name.empty();
+    PendingCapture capture;
+    const bool forward = isForwardCaptureRequest(req->post_duration_s);
+    if (forward) {
+      capture.follow = std::make_unique<ForwardFollow>();
+    }
+    const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
+    const bool record_everything =
+      topics_to_write.empty() || topics_to_write.at(0).name.empty();
+    {
       std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
       for (const auto& buffer : buffers_) {
-        // Skip cloning a topic this capture will never read from -- most
-        // profiles use only a handful of the buffered topics.
-        if (!record_everything &&
-          std::none_of(
+        bool include_post_trigger = buffer.first.include_post_trigger;
+        if (!record_everything) {
+          auto topic = std::find_if(
             topics_to_write.begin(), topics_to_write.end(),
-            [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
-        {
-          continue;
+            [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;});
+          if (topic == topics_to_write.end()) {
+            continue;
+          }
+          if (topic->include_post_trigger != -1) {
+            include_post_trigger = topic->include_post_trigger;
+          }
         }
-        cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
+        if (forward && include_post_trigger) {
+          auto follower = buffer.second->cloneAndFollow();
+          capture.follow->links.emplace_back(buffer.second, follower);
+          cloned_buffers.emplace_back(buffer.first, follower);
+        } else {
+          cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
+        }
       }
     }
-    // else: left empty here. createBag() takes the (deferred) clone itself,
-    // once the forward window elapses or the goal is canceled, so it captures
-    // everything buffered up to that later point instead of this one.
 
-    PendingCapture capture;
     capture.goal_handle = goal_handle;
     capture.cloned_buffers = std::move(cloned_buffers);
     capture.bag_writer_ptr = bag_writer_ptr;
@@ -1724,17 +1756,15 @@ void Snapshotter::createBag(PendingCapture capture)
 
   // A named profile picks the topic list and each topic's max_rate_hz (as
   // throttle_period, via the same override mechanism topics[].throttle_period
-  // uses below). An empty profile falls back to req->topics as-is. Resolved
-  // up front (not just for the write loop below) so a forward capture's
-  // deferred clone can also skip topics this goal will never write.
+  // uses below). An empty profile falls back to req->topics as-is.
   const bool use_profile = !req->profile.empty();
   const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
   const bool record_everything =
     topics_to_write.empty() || topics_to_write.at(0).name.empty();
 
   // Set when the forward wait below is cut short by a cancel: it still runs
-  // the deferred clone and the write loop that follow, using whatever was
-  // buffered up to that point, instead of discarding it. The write loops'
+  // the write loop that follows, using whatever was followed up to that
+  // point, instead of discarding it. The write loops'
   // own is_canceling() checks are skipped once this is true -- cancellation
   // is a one-shot, latched signal, so honoring it here (by writing the
   // partial buffer) is the only handling it gets; re-checking it again a few
@@ -1751,9 +1781,9 @@ void Snapshotter::createBag(PendingCapture capture)
       request_time + rclcpp::Duration::from_seconds(req->post_duration_s);
     while (this->now() < deadline) {
       if (goal_handle->is_canceling()) {
-        // Do not finalize here: falling through still runs the deferred
-        // clone and the write loop below with whatever topicCb() buffered
-        // during the (cut-short) wait, so a capture stopped early -- the
+        // Do not finalize here: falling through still runs the write loop
+        // below with whatever the followers received during the (cut-short)
+        // wait, so a capture stopped early -- the
         // normal way a ring+post_duration_s profile like "conversation" ends,
         // via stop_capture well before its post_duration_s cap -- keeps its
         // data instead of finalizing an empty bag.
@@ -1770,26 +1800,7 @@ void Snapshotter::createBag(PendingCapture capture)
       std::this_thread::sleep_for(kForwardPollPeriod);
     }
 
-    // Deferred clone: every topic has kept being buffered by topicCb() the
-    // whole time (recording_ permitting), exactly as when idle. This is
-    // the same clone handle_accepted takes for an immediate capture, just
-    // taken later so it includes what arrived during the wait. Callers
-    // using this mode leave req->stop_time at its default (0), and
-    // rangeFromTimes() already treats stop_time==0 as "no upper trim"
-    // (unchanged), so writeTopic()'s unmodified call below naturally
-    // picks up everything through this point.
-    std::shared_lock<std::shared_mutex> read_lock(buffers_lock_);
-    for (const auto & buffer : buffers_) {
-      // Skip cloning a topic this capture will never read from.
-      if (!record_everything &&
-        std::none_of(
-          topics_to_write.begin(), topics_to_write.end(),
-          [&buffer](const DetailsMsg & t) {return t.name == buffer.first.name;}))
-      {
-        continue;
-      }
-      cloned_buffers.emplace_back(buffer.first, buffer.second->clone());
-    }
+    capture.follow.reset();
   }
 
   if (!record_everything) {

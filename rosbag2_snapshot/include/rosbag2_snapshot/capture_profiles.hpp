@@ -36,6 +36,15 @@ struct ProfileTopicSpec
   // gives both of those meanings elsewhere (INHERIT_*, NO_*_LIMIT).
   std::optional<double> duration_s;
   std::optional<double> memory_mb;
+  // Write-time knobs, applied as the matching TopicDetails fields when this
+  // profile is selected. Unset leaves the topic's own configuration.
+  // compression: "jpg", "png", "h264" or "none".
+  std::string compression;
+  std::optional<int> compression_quality;
+  std::optional<bool> override_old_timestamps;
+  std::optional<int> queue_depth;
+  std::optional<int> old_messages_to_keep;
+  std::optional<bool> h264_throttle_skip;
 };
 
 struct CaptureProfile

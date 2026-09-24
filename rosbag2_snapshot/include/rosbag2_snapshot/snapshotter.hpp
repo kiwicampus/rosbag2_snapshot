@@ -84,8 +84,10 @@ struct ImageCompressionOptions
 {
   bool use_compression = false;
   std::string format;  // "jpg" or "png"
-  cv::ImwriteFlags imwrite_flag;  // opencv imencode() flag
-  int imwrite_flag_value;  // jpg quality (0-100) or png compression level (0-9)
+  cv::ImwriteFlags imwrite_flag = cv::IMWRITE_JPEG_QUALITY;  // opencv imencode() flag
+  int imwrite_flag_value = 95;  // jpg quality (0-100) or png compression level (0-9)
+  // Encode this topic as h264 even when the goal's use_h264 is false.
+  bool h264 = false;
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   // Configured once at startup (setParameters()); never itself used to
   // encode. Every capture clones its own instance via cloneConfig() so

@@ -243,3 +243,67 @@ TEST(CaptureProfiles, IncludeCycleDropsBothProfiles)
 
   std::filesystem::remove_all(dir);
 }
+
+TEST(CaptureProfiles, WriteKnobsAreParsed)
+{
+  auto dir = makeEmptyDir("write_knobs");
+  writeFile(
+    dir / "knobs.yaml",
+    "topics:\n"
+    "  - name: /cam\n    compression: jpg\n    compression_quality: 69\n"
+    "  - name: /mask\n    compression: png\n"
+    "  - name: /front\n    compression: h264\n    h264_throttle_skip: true\n"
+    "  - name: /raw\n    compression: none\n"
+    "  - name: /tf_static\n    duration_s: -1\n    override_old_timestamps: true\n"
+    "  - name: /state\n    old_messages_to_keep: 1\n    queue_depth: 1\n"
+    "  - name: /plain\n");
+
+  auto result = rosbag2_snapshot::loadProfilesDir(dir.string());
+
+  ASSERT_TRUE(result.warnings.empty());
+  const auto * p = result.profiles.find("knobs");
+  ASSERT_NE(p, nullptr);
+  ASSERT_EQ(p->topics.size(), 7u);
+  EXPECT_EQ(p->topics[0].compression, "jpg");
+  EXPECT_EQ(p->topics[0].compression_quality.value_or(-1), 69);
+  EXPECT_EQ(p->topics[1].compression, "png");
+  EXPECT_FALSE(p->topics[1].compression_quality.has_value());
+  EXPECT_EQ(p->topics[2].compression, "h264");
+  EXPECT_TRUE(p->topics[2].h264_throttle_skip.value_or(false));
+  EXPECT_EQ(p->topics[3].compression, "none");
+  EXPECT_DOUBLE_EQ(p->topics[4].duration_s.value_or(0.0), -1.0);
+  EXPECT_TRUE(p->topics[4].override_old_timestamps.value_or(false));
+  EXPECT_EQ(p->topics[5].old_messages_to_keep.value_or(-1), 1);
+  EXPECT_EQ(p->topics[5].queue_depth.value_or(-1), 1);
+  EXPECT_TRUE(p->topics[6].compression.empty());
+  EXPECT_FALSE(p->topics[6].override_old_timestamps.has_value());
+  EXPECT_FALSE(p->topics[6].queue_depth.has_value());
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(CaptureProfiles, InvalidWriteKnobsAreRejected)
+{
+  auto dir = makeEmptyDir("write_knobs_invalid");
+  writeFile(dir / "good.yaml", "topics:\n  - name: /ok\n");
+  writeFile(dir / "bad_format.yaml", "topics:\n  - name: /x\n    compression: webp\n");
+  writeFile(
+    dir / "bad_jpg_quality.yaml",
+    "topics:\n  - name: /x\n    compression: jpg\n    compression_quality: 101\n");
+  writeFile(
+    dir / "bad_png_level.yaml",
+    "topics:\n  - name: /x\n    compression: png\n    compression_quality: 10\n");
+  writeFile(
+    dir / "quality_without_format.yaml",
+    "topics:\n  - name: /x\n    compression: h264\n    compression_quality: 5\n");
+  writeFile(dir / "bad_queue_depth.yaml", "topics:\n  - name: /x\n    queue_depth: 0\n");
+  writeFile(dir / "bad_old_messages.yaml", "topics:\n  - name: /x\n    old_messages_to_keep: -1\n");
+
+  auto result = rosbag2_snapshot::loadProfilesDir(dir.string());
+
+  EXPECT_NE(result.profiles.find("good"), nullptr);
+  EXPECT_EQ(result.profiles.profiles.size(), 1u);
+  EXPECT_EQ(result.warnings.size(), 6u);
+
+  std::filesystem::remove_all(dir);
+}

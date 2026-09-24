@@ -46,7 +46,7 @@ There is no separate client binary. Requests to write a bag, pause/resume buffer
 
 ### Image compression
 
-Set per topic via `topic_details.<topic>.compression.*` params, only for topics explicitly listed in `topics`/`topic_details` with `type: sensor_msgs/msg/Image` (not for auto-discovered or capture-profile topics):
+Set per topic via `topic_details.<topic>.compression.*` params, for topics listed in `topics`/`topic_details` with `type: sensor_msgs/msg/Image`. Capture-profile topics use the profile's own `compression` key instead (see [Capture profiles](#capture-profiles)):
 
 | Param | Meaning |
 |---|---|
@@ -76,6 +76,19 @@ topics:
                                     # capture. Distinct from "forward capture" (the post_duration_s mode); this
                                     # is a per-topic participation switch, not a mode switch.
 ```
+
+Every per-topic key a profile entry accepts. The write-time keys apply when the profile is selected and leave the topic's own configuration alone when omitted.
+
+| Key | Meaning |
+|---|---|
+| `name` | Topic name (required) |
+| `type`, `qos` | Subscription type and QoS (`DEFAULT`, `SENSOR_DATA`, `TRANSIENT_LOCAL`). Omitted = resolved from the graph |
+| `duration_s`, `memory_mb` | This topic's own ring limits, overriding `default_duration_limit`/`default_memory_limit`. `duration_s: -1` = no age limit; every capture then writes the topic's whole buffer, ignoring `start_time`/`stop_time` |
+| `max_rate_hz` | Keep at most one message per `1/max_rate_hz` |
+| `include_post_trigger` | See the example above |
+| `compression` | `jpg`, `png`, `h264` or `none`. Image topics only. `h264` needs an H264 build and falls back to jpg without one |
+| `compression_quality` | jpg quality (0-100, default 95) or png level (0-9, default 3) |
+| `override_old_timestamps`, `old_messages_to_keep`, `queue_depth`, `h264_throttle_skip` | Same as the `TopicDetails` fields of the same names |
 
 A profile can nest others via `include`, so one `TriggerSnapshot.profile` selection can pull in several profiles at once:
 

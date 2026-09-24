@@ -1337,17 +1337,28 @@ bool Snapshotter::writeTopic(
   // none of them can corrupt another's stream.
   std::shared_ptr<FFMPEGEncoder> capture_encoder;
 #endif
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
+  const bool wants_h264 = req->use_h264 || topic_details.img_compression_opts_.h264;
+  const bool use_h264 = wants_h264 && topic_details.img_compression_opts_.encoder != nullptr;
+  if (wants_h264 && !use_h264 && topic_details.img_compression_opts_.use_compression) {
+    RCLCPP_ERROR(
+      get_logger(), "No H264 encoder for topic %s; falling back to %s compression",
+      topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str());
+  }
+#else
+  const bool use_h264 = req->use_h264 || topic_details.img_compression_opts_.h264;
+#endif
   if(topic_details.img_compression_opts_.use_compression)
   {
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-    if (req->use_h264)
+    if (use_h264)
     {
       RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression", topic_details.name.c_str());
       tm.type = "foxglove_msgs/msg/CompressedVideo";
     }
     else
 #else
-    if (req->use_h264)
+    if (use_h264)
     {
       RCLCPP_ERROR(
         get_logger(),
@@ -1379,7 +1390,7 @@ bool Snapshotter::writeTopic(
   double prev_msg_time = 0.0;
   auto start = std::chrono::high_resolution_clock::now();
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-  bool h264_throttle_skip = req->use_h264 && topic_details.h264_throttle_skip;
+  bool h264_throttle_skip = use_h264 && topic_details.h264_throttle_skip;
 #else
   // H264 never actually happens without support for it (see the fallback
   // above), so this is never true regardless of what the request asked for.
@@ -1405,7 +1416,11 @@ bool Snapshotter::writeTopic(
   // set, not on the current message.
   const bool start_time_specified = builtin_time_nonzero(req->start_time);
   const bool stop_time_specified = builtin_time_nonzero(req->stop_time);
-  const rclcpp::Duration bag_duration = rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time);
+  // With no stop_time (a forward capture) the window ends at request_time, so
+  // only messages older than start_time count as old.
+  const rclcpp::Duration bag_duration = stop_time_specified ?
+    rclcpp::Time(req->stop_time) - rclcpp::Time(req->start_time) :
+    request_time - rclcpp::Time(req->start_time);
   bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -1463,7 +1478,7 @@ bool Snapshotter::writeTopic(
       }
 
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
-      if (req->use_h264)
+      if (use_h264)
       {
         if (!capture_encoder) {
           capture_encoder = topic_details.img_compression_opts_.encoder->cloneConfig();
@@ -1727,6 +1742,27 @@ std::vector<DetailsMsg> Snapshotter::resolveTopicsToWrite(
       msg.name = spec.name;
       msg.throttle_period = spec.max_rate_hz > 0.0 ? (1.0 / spec.max_rate_hz) : -1.0;
       msg.include_post_trigger = spec.include_post_trigger ? 1 : 0;
+      if (spec.compression == "none") {
+        msg.use_compression = 0;
+      } else if (!spec.compression.empty()) {
+        msg.use_compression = 1;
+        msg.format = spec.compression;
+        if (spec.compression == "jpg") {
+          msg.jpg_quality = spec.compression_quality.value_or(95);
+        } else if (spec.compression == "png") {
+          msg.png_compression = spec.compression_quality.value_or(3);
+        }
+      }
+      if (spec.override_old_timestamps.has_value()) {
+        msg.override_old_timestamps = *spec.override_old_timestamps ? 1 : 0;
+      }
+      if (spec.queue_depth.has_value()) {msg.queue_depth = *spec.queue_depth;}
+      if (spec.old_messages_to_keep.has_value()) {
+        msg.old_messages_to_keep = *spec.old_messages_to_keep;
+      }
+      if (spec.h264_throttle_skip.has_value()) {
+        msg.h264_throttle_skip = *spec.h264_throttle_skip ? 1 : 0;
+      }
       profile_topics.push_back(msg);
     }
   }
@@ -2069,7 +2105,14 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.format != "")
   {
     details.img_compression_opts_.format = req_msg.format;
-    if (req_msg.format == "jpg" || req_msg.format == "jpeg") 
+    details.img_compression_opts_.h264 = false;
+    if (req_msg.format == "h264")
+    {
+      details.img_compression_opts_.h264 = true;
+      details.img_compression_opts_.format = "jpg";
+      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+    }
+    else if (req_msg.format == "jpg" || req_msg.format == "jpeg") 
     {
       details.img_compression_opts_.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
       if (req_msg.jpg_quality != -1) details.img_compression_opts_.imwrite_flag_value = req_msg.jpg_quality;
@@ -2239,6 +2282,10 @@ bool Snapshotter::subscribeResolvedTopic(
   details.name = name;
   details.type = type;
   details.qos = qos;
+#ifdef ROSBAG2_SNAPSHOT_HAVE_H264
+  details.img_compression_opts_.encoder = std::make_shared<FFMPEGEncoder>();
+  details.img_compression_opts_.encoder->setParameters(this, "h264.");
+#endif
 
   SnapshotterTopicOptions topic_options(duration_limit, memory_limit);
   fixTopicOptions(topic_options);

@@ -78,13 +78,51 @@ bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, 
       if (node["memory_mb"]) {
         spec.memory_mb = node["memory_mb"].as<double>();
       }
+      spec.compression = node["compression"] ? node["compression"].as<std::string>() : "";
+      if (node["compression_quality"]) {
+        spec.compression_quality = node["compression_quality"].as<int>();
+      }
+      if (node["override_old_timestamps"]) {
+        spec.override_old_timestamps = node["override_old_timestamps"].as<bool>();
+      }
+      if (node["queue_depth"]) {
+        spec.queue_depth = node["queue_depth"].as<int>();
+      }
+      if (node["old_messages_to_keep"]) {
+        spec.old_messages_to_keep = node["old_messages_to_keep"].as<int>();
+      }
+      if (node["h264_throttle_skip"]) {
+        spec.h264_throttle_skip = node["h264_throttle_skip"].as<bool>();
+      }
 
       if (spec.max_rate_hz < 0.0) {
         error = "max_rate_hz for topic " + spec.name + " must be >= 0";
         return false;
       }
-      if (spec.duration_s.has_value() && *spec.duration_s <= 0.0) {
-        error = "duration_s for topic " + spec.name + " must be > 0";
+      if (spec.duration_s.has_value() && *spec.duration_s <= 0.0 && *spec.duration_s != -1.0) {
+        error = "duration_s for topic " + spec.name + " must be > 0, or -1 for no limit";
+        return false;
+      }
+      if (!spec.compression.empty() && spec.compression != "jpg" &&
+        spec.compression != "png" && spec.compression != "h264" && spec.compression != "none")
+      {
+        error = "compression for topic " + spec.name + " must be jpg, png, h264 or none";
+        return false;
+      }
+      if (spec.compression_quality.has_value()) {
+        const int max = spec.compression == "jpg" ? 100 : (spec.compression == "png" ? 9 : -1);
+        if (max < 0 || *spec.compression_quality < 0 || *spec.compression_quality > max) {
+          error = "compression_quality for topic " + spec.name +
+            " needs jpg (0-100) or png (0-9) compression";
+          return false;
+        }
+      }
+      if (spec.queue_depth.has_value() && *spec.queue_depth <= 0) {
+        error = "queue_depth for topic " + spec.name + " must be > 0";
+        return false;
+      }
+      if (spec.old_messages_to_keep.has_value() && *spec.old_messages_to_keep <= 0) {
+        error = "old_messages_to_keep for topic " + spec.name + " must be > 0";
         return false;
       }
       if (spec.memory_mb.has_value() && *spec.memory_mb <= 0.0) {

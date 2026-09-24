@@ -1337,10 +1337,17 @@ bool Snapshotter::writeTopic(
   // none of them can corrupt another's stream.
   std::shared_ptr<FFMPEGEncoder> capture_encoder;
 #endif
+  const bool compress = topic_details.img_compression_opts_.use_compression &&
+    (topic_details.type.empty() || topic_details.type == "sensor_msgs/msg/Image");
+  if (topic_details.img_compression_opts_.use_compression && !compress) {
+    RCLCPP_WARN(
+      get_logger(), "Topic %s is %s, not an image; recording it uncompressed",
+      topic_details.name.c_str(), topic_details.type.c_str());
+  }
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   const bool wants_h264 = req->use_h264 || topic_details.img_compression_opts_.h264;
   const bool use_h264 = wants_h264 && topic_details.img_compression_opts_.encoder != nullptr;
-  if (wants_h264 && !use_h264 && topic_details.img_compression_opts_.use_compression) {
+  if (wants_h264 && !use_h264 && compress) {
     RCLCPP_ERROR(
       get_logger(), "No H264 encoder for topic %s; falling back to %s compression",
       topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str());
@@ -1348,7 +1355,7 @@ bool Snapshotter::writeTopic(
 #else
   const bool use_h264 = req->use_h264 || topic_details.img_compression_opts_.h264;
 #endif
-  if(topic_details.img_compression_opts_.use_compression)
+  if(compress)
   {
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
     if (use_h264)
@@ -1460,7 +1467,7 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
-    if(topic_details.img_compression_opts_.use_compression)
+    if(compress)
     {
       cv::Mat cv_img;
       sensor_msgs::msg::Image raw_img;

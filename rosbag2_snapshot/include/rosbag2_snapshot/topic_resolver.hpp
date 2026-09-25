@@ -19,16 +19,14 @@ public:
   explicit TopicResolver(rclcpp::Node * node);
 
   // Message type from the graph. False if the topic has no publisher (or
-  // subscriber) yet. If publishers disagree on the type, the first one is
-  // used and a warning is logged rather than picked silently.
+  // subscriber) yet. If endpoints disagree on the type, the first is used,
+  // with a warning.
   bool resolveType(const std::string & topic_name, std::string & type_out) const;
 
-  // QoS adapted to what the topic's publishers currently offer (most
-  // permissive wins on disagreement) via
-  // rosbag2_transport::Rosbag2QoS::adapt_request_to_offers, the same rule
-  // `ros2 bag record` uses, so a BEST_EFFORT publisher (a camera, typically)
-  // is actually matched instead of silently buffering nothing. False if
-  // there is no publisher yet.
+  // QoS adapted to the current publishers' offers
+  // (rosbag2_transport::Rosbag2QoS::adapt_request_to_offers, as
+  // `ros2 bag record` does), so a BEST_EFFORT publisher is still matched.
+  // False if there is no publisher yet.
   bool resolveQos(const std::string & topic_name, rclcpp::QoS & qos_out) const;
 
 private:

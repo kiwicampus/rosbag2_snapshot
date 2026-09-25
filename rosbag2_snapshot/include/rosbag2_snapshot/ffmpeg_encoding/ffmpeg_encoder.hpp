@@ -112,12 +112,8 @@ public:
   void setLogger(rclcpp::Logger logger) { logger_ = logger; }
   void setParameters(rclcpp::Node * node, const std::string ns = "ffmpeg_image_transport.");
   void reset();
-  // Copies only this instance's static config (codec/profile/preset/tune/
-  // qmax/GOP/bitrate/pixel format/frame rate/logger) into a freshly
-  // constructed, unopened FFMPEGEncoder -- no codec context, no pts_/
-  // ptsToStamp_, no re-declaring ROS parameters. Lets each capture of a
-  // topic get its own independent encoder instance without repeating
-  // setParameters() (which would throw on a second declare_parameter()).
+  // Returns a fresh, unopened encoder with this one's configuration and no
+  // codec or PTS state, so each capture of a topic encodes independently.
   std::shared_ptr<FFMPEGEncoder> cloneConfig() const;
   // encode image
   void encodeImage(const cv::Mat & img, const Header & header, const rclcpp::Time & t0);
@@ -147,7 +143,7 @@ private:
   std::string codecName_;  // e.g. "libx264"
   std::string preset_;     // e.g. "slow", "medium", "lossless"
   std::string profile_;    // e.g. "main", "high", "rext"
-  std::string tune_;       // e.g. "tune"
+  std::string tune_;       // e.g. "zerolatency"
   std::string delay_;      // default is 4 frames for parallel processing. 0 is lowest latency
   int qmax_{0};            // max allowed quantization. The lower the better quality
   int GOPSize_{15};        // distance between two keyframes

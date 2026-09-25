@@ -25,15 +25,10 @@ struct ProfileTopicSpec
   double max_rate_hz = 0.0;
   // false = keep this topic's pre-trigger buffer in a forward capture, but
   // don't include what arrives after the trigger. true (default) records
-  // both. No effect outside a forward capture. Named apart from "forward"
-  // (the capture-level post_duration_s mode) since this is a per-topic
-  // participation switch, not a mode switch.
+  // both. No effect outside a forward capture.
   bool include_post_trigger = true;
-  // Per-topic override of this topic's own ring window/memory cap, beyond
-  // the node-wide default_duration_limit/default_memory_limit. unset (the
-  // default) means inherit the node-wide value, same as every other topic;
-  // std::optional rather than a 0/-1 sentinel because the engine already
-  // gives both of those meanings elsewhere (INHERIT_*, NO_*_LIMIT).
+  // Per-topic override of this topic's own ring window/memory cap. Unset
+  // inherits the node-wide default_duration_limit/default_memory_limit.
   std::optional<double> duration_s;
   std::optional<double> memory_mb;
   // Write-time knobs, applied as the matching TopicDetails fields when this
@@ -79,7 +74,7 @@ struct ProfileParseResult
 };
 
 // Loads every "<name>.yaml" file directly inside dir as one profile, named
-// after its filename stem. An empty dir is a no-op (capture_profiles_dir is
+// after its filename stem. An empty dir string is a no-op (capture_profiles_dir is
 // optional).
 ProfileParseResult loadProfilesDir(const std::string & dir);
 

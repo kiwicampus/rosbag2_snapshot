@@ -45,9 +45,7 @@ namespace rosbag2_snapshot
 //  - the request specifies a real time window (start_time or stop_time set).
 //    A request that leaves both at zero asks for "everything currently
 //    buffered": there is no window to be "outside of", so every message
-//    keeps its own timestamp regardless of the topic's settings. Every
-//    forward (live) capture, and any request that doesn't set them, leaves
-//    both at zero.
+//    keeps its own timestamp regardless of the topic's settings.
 inline bool shouldOverrideOldTimestamp(
   bool override_old_timestamps,
   int old_messages_to_keep,
@@ -66,8 +64,8 @@ inline bool shouldOverrideOldTimestamp(
 }
 
 // The bag_duration_ns shouldOverrideOldTimestamp() compares against: the
-// requested window, or up to request_ns when no stop time was given (a
-// forward capture), so only messages older than start count as old.
+// requested window, or up to request_ns when no stop time was given, so
+// only messages older than start count as old.
 inline int64_t overrideWindowNs(
   bool stop_time_specified, int64_t start_ns, int64_t stop_ns, int64_t request_ns)
 {

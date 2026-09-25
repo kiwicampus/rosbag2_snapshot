@@ -4,20 +4,20 @@ string filename                      # Output path, used as given. Must end in .
 TopicDetails[] topics                # Topics to include. Empty = every buffered topic
 builtin_interfaces/Time start_time   # Earliest message to include. time(0) = each topic's oldest buffered message
 builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message
-bool use_h264                        # Compress image topics with h264
+bool use_h264                        # Encode compression-enabled Image topics as h264 instead of jpg/png
 bool throttle_msgs                   # Apply each topic's configured throttle period; false = every message in range
-bool use_interval_mode               # Interpret start_time/stop_time as an interval around msg_timestamp
-                                     # instead of as absolute times
-builtin_interfaces/Time  msg_timestamp  # Timestamp of the message that triggered the snapshot; kept out of
-                                        # interval_mode_tolerance rounding so that message is never missed
+bool use_interval_mode               # Write [msg_timestamp - tolerance, msg_timestamp + tolerance]
+                                     # instead of start_time/stop_time
+builtin_interfaces/Time  msg_timestamp  # Center of the interval-mode window; interval_mode_single_msg
+                                        # matches this stamp
 float32 interval_mode_tolerance       # interval_mode window: [msg_timestamp - tolerance, msg_timestamp + tolerance]
 bool interval_mode_single_msg        # Write one message for CameraInfo/ImageMarker/compressed Image/
                                      # interval_single_msg_types topics: exact stamp == msg_timestamp preferred,
                                      # else closest with a warning. false = every message in the interval
-string rosbag_preset_profile         # rosbag2 storage profile. Empty = default profile
-string profile                       # Named capture profile (capture_profiles_dir) selecting topics and their
-                                     # max_rate_hz. Empty = topics (or all buffered) honoring throttle_msgs.
-                                     # A profile's max_rate_hz always applies, unlike throttle_msgs
+string rosbag_preset_profile         # rosbag2 storage preset. Empty = the node's rosbag_preset_profile
+string profile                       # Named capture profile (capture_profiles_dir) selecting topics and
+                                     # their per-topic overrides. Empty = topics (or all buffered) honoring
+                                     # throttle_msgs. A profile's max_rate_hz always applies
 float32 post_duration_s              # >0 defers writing until this many seconds after goal acceptance (or
                                      # until canceled), producing a forward/live capture that also includes
                                      # messages arriving after the trigger; buffering is otherwise unchanged.
@@ -34,5 +34,5 @@ string message                       # Error description if failed
 ---
 #feedback definition
 float32 progress                     # Progress of the snapshot in percentage
-float32 duration                     # Duration of the compression process in seconds
+float32 duration                     # Seconds since the capture started
 string message                       # Current status of the snapshot

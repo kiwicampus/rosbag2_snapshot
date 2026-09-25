@@ -10,10 +10,8 @@ TEST(TimestampOverride, NeitherFlagSetNeverOverrides)
 
 TEST(TimestampOverride, FlagSetButNoWindowSpecifiedNeverOverrides)
 {
-  // Regression case: start_time/stop_time both left at zero (every forward
-  // capture, and any request that doesn't set them) must never trigger the
-  // override, even though the message is far "older" than a zero-length
-  // window would suggest.
+  // start_time and stop_time both zero means no window: never override,
+  // even though the message is far older than a zero-length window.
   EXPECT_FALSE(rosbag2_snapshot::shouldOverrideOldTimestamp(
     true, 0, false, false, 1'000'000'000, 0));
   EXPECT_FALSE(rosbag2_snapshot::shouldOverrideOldTimestamp(

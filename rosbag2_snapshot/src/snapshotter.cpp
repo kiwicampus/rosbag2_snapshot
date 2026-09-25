@@ -125,13 +125,9 @@ std::filesystem::path findMcapFile(const std::filesystem::path & directory)
   return {};
 }
 
-// The mcap plugin names the data file after bag_dir's basename *at the time
-// it was opened* (<that_name>_0.mcap). Since bag_dir is opened under its
-// staging name and later renamed into place, the embedded file and
-// metadata.yaml's relative_file_paths/files[].path both still carry the
-// old name; this renames the file and patches both to match bag_dir's
-// current (final) basename, which is what a consumer that reconstructs the
-// data file path itself (rather than reading metadata.yaml) needs.
+// The mcap plugin names the data file after the directory it was opened as
+// (the staging name). Rename it and patch metadata.yaml so both match
+// bag_dir's final basename.
 void renameBagFileToMatchDirectory(const std::filesystem::path & bag_dir)
 {
   const std::filesystem::path mcap = findMcapFile(bag_dir);
@@ -217,10 +213,7 @@ bool is_message_of_type(
  * a builtin_interfaces/Time stamp (not just named "header"/"stamp") before reading it, and
  * cleanly rejects anything else.
  *
- * This package targets any robot, so it can't depend on a robot's own message packages to
- * read a timestamp the way deserializing into a hardcoded C++ type would require. Resolving
- * the layout at runtime avoids that and works regardless of field order. Each type's layout
- * is resolved once and cached, since the lookup loads a shared library.
+ * Each type's layout is resolved once and cached, since the lookup loads a shared library.
  */
 class HeaderStampReader
 {
@@ -269,15 +262,9 @@ private:
     std::shared_ptr<rcpputils::SharedLibrary> type_support_library;
   };
 
-  // Guards every access to layouts_ (lookup and insert-on-miss alike): this reader is a
-  // single shared instance, and Snapshotter runs each accepted TriggerSnapshot goal on
-  // its own detached thread (see handle_accepted), so concurrent snapshots can call in
-  // here at once. unordered_map gives no thread-safety for a concurrent insert against
-  // any other operation, including reads of a different key: an insert can rehash and
-  // touch every bucket. The lock is released before using the returned pointer: once an
-  // entry exists it is never mutated or erased again, and unordered_map guarantees
-  // references to existing elements stay valid across later inserts, so reading through
-  // the pointer afterward (the actual deserialization work) needs no lock.
+  // Guards layouts_; concurrent captures call in here. Entries are never mutated or
+  // erased once inserted, and unordered_map references survive rehashing, so the
+  // returned pointer is used without the lock.
   const Layout * layoutFor(const std::string & type)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -349,10 +336,7 @@ bool topic_uses_interval_single_msg_narrowing(
   const TopicDetails & details,
   const std::unordered_set<std::string> & interval_single_msg_types)
 {
-  // Hardcoded and unconditional, so an upgrade doesn't silently drop this narrowing for a
-  // deployment that hasn't listed them in interval_single_msg_types. Safe to hardcode: both
-  // types come from sensor_msgs/visualization_msgs, which this package already depends on
-  // regardless of which robot it runs on.
+  // Always narrowed, independent of interval_single_msg_types.
   if (details.type == "sensor_msgs/msg/CameraInfo") {
     return true;
   }
@@ -364,8 +348,7 @@ bool topic_uses_interval_single_msg_narrowing(
   if (details.type == "sensor_msgs/msg/Image") {
     return details.img_compression_opts_.use_compression;
   }
-  // Everything else is explicit opt-in: this package works on any robot, so it can't know
-  // a robot's own message types up front. Each deployment lists the ones it wants here.
+  // Everything else is opt-in via interval_single_msg_types.
   return interval_single_msg_types.count(details.type) > 0;
 }
 
@@ -457,9 +440,6 @@ const rclcpp::Duration SnapshotterTopicOptions::NO_DURATION_LIMIT = rclcpp::Dura
 const int64_t SnapshotterTopicOptions::NO_MEMORY_LIMIT = -1;
 const rclcpp::Duration SnapshotterTopicOptions::INHERIT_DURATION_LIMIT = rclcpp::Duration(0s);
 const int64_t SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT = 0;
-// uint32_t is enough to hold 1e6 itself; the multiply it's used in
-// (options_.default_memory_limit_ *= MB_TO_B, an int64_t) promotes this to
-// int64_t, so it doesn't reintroduce the overflow int64_t was widened to fix.
 static constexpr uint32_t MB_TO_B = 1e6;
 
 SnapshotterTopicOptions::SnapshotterTopicOptions(
@@ -639,8 +619,7 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const & snapshot_msg) const
 {
-  // Message payload plus an estimate of its SnapshotMessage/deque-node/shared_ptr overhead,
-  // so size_ and the memory limits it's checked against are in the same units.
+  // Message payload plus an estimate of its SnapshotMessage/deque-node/shared_ptr overhead.
   size_t message_size = snapshot_msg.msg->size();
   size_t metadata_size = sizeof(SnapshotMessage);
   size_t deque_overhead = sizeof(std::deque<SnapshotMessage>::value_type) + 32;
@@ -758,14 +737,10 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
   recording_(true),
   topic_resolver_(this)
 {
-  // Created first (before subscribeProfileTopics(), which can itself
-  // trigger a publishState() call via subscribeResolvedTopic()) so state_pub_
-  // is never null when publishState() runs. Plain volatile QoS, not
-  // transient_local: this node is always run with intra-process communication
-  // enabled (see main.cpp), which only supports volatile durability; a
-  // transient_local publisher fails to even construct in that mode. A late
-  // subscriber gets the current state on the next change instead of
-  // immediately.
+  // Created first: subscribeProfileTopics() can call publishState() via
+  // subscribeResolvedTopic(). Volatile QoS: an intra-process publisher
+  // (main.cpp enables it) cannot be transient_local, so a late subscriber
+  // gets the state on the next change.
   state_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotState>(
     "snapshot_state", rclcpp::QoS(1));
   capture_event_pub_ = create_publisher<rosbag2_snapshot_msgs::msg::SnapshotCaptureEvent>(
@@ -829,17 +804,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
 
 Snapshotter::~Snapshotter()
 {
-  // Explicitly wait for every in-flight capture before touching buffers_ or
-  // any MessageQueue below. capture_futures_ being the last-declared member
-  // of Snapshotter (each std::future in it, from std::async(launch::async,
-  // ...), blocks in its own destructor until that capture finishes) only
-  // guarantees no capture thread is still running once this destructor BODY
-  // returns. Member destruction happens after the body, in reverse
-  // declaration order; it says nothing about the body itself, which is
-  // exactly where the loop below runs. Without this explicit wait, a
-  // forward capture still mid-wait on its own thread could be iterating
-  // buffers_, or reading a queue's sub_, at the same time this loop resets
-  // it.
+  // Join in-flight captures before tearing down subscriptions.
   for (auto & f : capture_futures_) {
     if (f.valid()) {
       f.wait();
@@ -1332,9 +1297,8 @@ bool Snapshotter::writeTopic(
   std::vector<int> compression_params;
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
   // This call's own encoder, cloned (config only, no codec state) from the
-  // topic's configured template on first use below -- concurrent captures
-  // of this same topic each get an independent codec context/PTS/GOP, so
-  // none of them can corrupt another's stream.
+  // topic's template on first use below, so concurrent captures of this
+  // topic each get an independent codec context/PTS/GOP.
   std::shared_ptr<FFMPEGEncoder> capture_encoder;
 #endif
   const bool compress =
@@ -1389,7 +1353,7 @@ bool Snapshotter::writeTopic(
     bag_writer.create_topic(tm, definitions_.get_full_text(tm.type));
   } catch (const std::exception & e) {
     RCLCPP_WARN(
-      get_logger(), "no message definition for %s (%s): %s -- the bag will carry no schema for it",
+      get_logger(), "no message definition for %s (%s): %s; the bag will carry no schema for it",
       tm.name.c_str(), tm.type.c_str(), e.what());
     bag_writer.create_topic(tm);
   }
@@ -1418,13 +1382,10 @@ bool Snapshotter::writeTopic(
     range = narrow_range_for_interval_single_msg(
       range, topic_details, req->msg_timestamp, get_logger());
   }
-  // Loop-invariant: req->start_time/stop_time don't change per message, and
-  // shouldOverrideOldTimestamp() only depends on whether each was actually
-  // set, not on the current message.
   const bool start_time_specified = builtin_time_nonzero(req->start_time);
   const bool stop_time_specified = builtin_time_nonzero(req->stop_time);
-  // With no stop_time (a forward capture) the window ends at request_time, so
-  // only messages older than start_time count as old.
+  // With no stop_time the window ends at request_time, so only messages
+  // older than start_time count as old.
   const rclcpp::Duration bag_duration(std::chrono::nanoseconds(overrideWindowNs(
       stop_time_specified, rclcpp::Time(req->start_time).nanoseconds(),
       rclcpp::Time(req->stop_time).nanoseconds(), request_time.nanoseconds())));
@@ -1532,9 +1493,6 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
   const rclcpp_action::GoalUUID &,
   std::shared_ptr<const TriggerSnapAction::Goal> goal)
 {
-  // filename becomes the literal on-disk final path (see finalizeCapture()),
-  // so it must end in .bag (the usual rosbag2 directory-mode naming
-  // convention) or .mcap (a use_flat_output=true caller's real destination).
   if (!hasAcceptedGoalFilename(goal->filename)) {
     RCLCPP_WARN(
       this->get_logger(),
@@ -1560,10 +1518,8 @@ rclcpp_action::GoalResponse Snapshotter::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // Reject only a goal racing to open a filename another capture already
-  // has in flight -- different filenames run concurrently (each opens its
-  // own staging path, clones its own buffers, and writeTopic() clones its
-  // own FFMPEGEncoder per capture, so nothing is shared across captures).
+  // Reject only a second goal for a filename already in flight; different
+  // filenames run concurrently.
   {
     std::unique_lock<std::shared_mutex> write_lock(state_lock_);
     if (active_filenames_.count(goal->filename)) {
@@ -1596,9 +1552,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   auto req = goal_handle->get_goal();
   auto res = std::make_shared<TriggerSnapAction::Result>();
 
-  // Reap any capture futures that have already finished. Just bookkeeping
-  // so this vector doesn't grow unbounded: the corresponding captures have
-  // already run to completion; this call never blocks.
+  // Reap finished captures (non-blocking).
   capture_futures_.erase(
     std::remove_if(
       capture_futures_.begin(), capture_futures_.end(),
@@ -1611,11 +1565,8 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   std::filesystem::path staging_path = stagingPathFor(final_path);
 
   if (std::filesystem::exists(staging_path)) {
-    // There's no "storage root" concept in this package, so there's no
-    // well-defined, bounded set of directories to sweep for orphaned
-    // staging files at startup. This lazily reclaims one left behind by a
-    // previous crash/kill -9 the moment that exact final_path is requested
-    // again.
+    // Left behind by a crash or kill; reclaimed when the same filename is
+    // requested again.
     RCLCPP_WARN(
       get_logger(),
       "Staging file %s already exists (likely left behind by a previous "
@@ -1698,24 +1649,21 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     capture.profile = req->profile;
     capture.flat_output = req->use_flat_output;
 
-    // std::async(launch::async, ...) instead of a detached thread: the
-    // returned future is kept in capture_futures_ so ~Snapshotter() can wait
-    // for it (see the comment on capture_futures_ in snapshotter.hpp).
+    // Kept in capture_futures_ so ~Snapshotter() joins it.
     capture_futures_.push_back(
       std::async(std::launch::async, &Snapshotter::createBag, this, std::move(capture)));
   } catch (const std::exception & ex) {
     // Cloning a buffer (bad_alloc) or std::async itself (thread-creation
-    // exhaustion under a burst of concurrent goals) can throw here, same
-    // uncaught-leak risk as inside createBag() -- see the try/catch there.
+    // exhaustion under a burst of concurrent goals) can throw here; same
+    // risk as inside createBag(), see the try/catch there.
     RCLCPP_ERROR(
       get_logger(), "Failed to start capture for %s: %s",
       staging_path.string().c_str(), ex.what());
     try {
       bag_writer_ptr->close();
     } catch (const std::exception &) {
-      // Best-effort: the staging file may be left incomplete, same as any
-      // other unclean shutdown -- the next startup's leftover-.tmp sweep
-      // covers it.
+      // Best-effort; a leftover staging file is overwritten when the same
+      // filename is requested again.
     }
     res->success = false;
     res->message = "Unable to start capture, " + std::string(ex.what());
@@ -1772,39 +1720,27 @@ void Snapshotter::createBag(PendingCapture capture)
 
   try {
 
-  // A named profile picks the topic list and each topic's max_rate_hz (as
-  // throttle_period, via the same override mechanism topics[].throttle_period
-  // uses below). An empty profile falls back to req->topics as-is.
+  // A named profile supplies the topic list and per-topic overrides;
+  // otherwise req->topics as-is.
   const bool use_profile = !req->profile.empty();
   const std::vector<DetailsMsg> topics_to_write = resolveTopicsToWrite(*req);
   const bool record_everything =
     topics_to_write.empty() || topics_to_write.at(0).name.empty();
 
-  // Set when the forward wait below is cut short by a cancel: it still runs
-  // the write loop that follows, using whatever was followed up to that
-  // point, instead of discarding it. The write loops'
-  // own is_canceling() checks are skipped once this is true -- cancellation
-  // is a one-shot, latched signal, so honoring it here (by writing the
-  // partial buffer) is the only handling it gets; re-checking it again a few
-  // lines later would just discard the very data we kept it around for.
+  // Set when a cancel ends the forward wait early. The partial buffer is
+  // still written, so the write loops' is_canceling() checks are skipped.
   bool canceled_during_forward_wait = false;
 
   if (isForwardCaptureRequest(req->post_duration_s)) {
-    // request_time is kept anchored at goal-acceptance (not recomputed
-    // after the wait below): it's also the reference instant for
-    // writeTopic()'s old-timestamp-override math and for
-    // refreshBuffer(request_time) further down, both of which mean "when
-    // was this capture requested," same as in the immediate-capture case.
+    // request_time stays at goal acceptance: it is the reference instant for
+    // writeTopic()'s timestamp overrides and for refreshBuffer().
     const rclcpp::Time deadline =
       request_time + rclcpp::Duration::from_seconds(req->post_duration_s);
     while (this->now() < deadline) {
       if (goal_handle->is_canceling()) {
-        // Do not finalize here: falling through still runs the write loop
-        // below with whatever the followers received during the (cut-short)
-        // wait, so a capture stopped early -- the
-        // normal way a ring+post_duration_s profile like "conversation" ends,
-        // via stop_capture well before its post_duration_s cap -- keeps its
-        // data instead of finalizing an empty bag.
+        // Do not finalize here: falling through still writes whatever the
+        // followers received during the cut-short wait, so a capture canceled
+        // before its post_duration_s cap keeps its data.
         canceled_during_forward_wait = true;
         success = false;
         message = "Canceled while waiting for forward capture window";
@@ -1850,10 +1786,8 @@ void Snapshotter::createBag(PendingCapture capture)
 
       if (message_queue->size_ == 0) RCLCPP_DEBUG(get_logger(), "Queue size for topic %s is zero", topic.name.c_str());
 
-      // Only force this topic's throttle when the profile itself set a max_rate_hz for
-      // it (topic.throttle_period != -1.0): a profile topic with no max_rate_hz must not
-      // pick up an unrelated static throttle_period configured on the same topic name via
-      // topics_/topic_details, which force_throttle would otherwise apply unconditionally.
+      // Force throttling only when the profile set max_rate_hz for this topic
+      // (throttle_period != -1), not for a throttle_period configured statically.
       bool force_topic_throttle = use_profile && topic.throttle_period != -1.0;
       if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time, force_topic_throttle)) {
         success = false;
@@ -1897,13 +1831,9 @@ void Snapshotter::createBag(PendingCapture capture)
   goal_handle->succeed(result);
 
   } catch (const std::exception & ex) {
-    // Anything above (deserializing a malformed frame, cv_bridge/OpenCV on a
-    // bad image, disk-full during write, etc.) previously unwound out of this
-    // std::async task uncaught: capture_futures_ is only ever wait()'d, never
-    // get()'d, so the exception was silently dropped and finalizeCapture()
-    // never ran -- permanently leaking this filename's active_filenames_
-    // entry and active_capture_count_ (which also wedges enableCb()'s pause
-    // path node-wide).
+    // capture_futures_ are only wait()'d, never get()'d, so an exception
+    // escaping here would be lost and finalizeCapture() skipped, leaking the
+    // filename's active_filenames_ entry and active_capture_count_.
     if (!finalized) {
       const std::string crash_message = std::string("capture crashed: ") + ex.what();
       RCLCPP_ERROR(get_logger(), "%s", crash_message.c_str());
@@ -1953,18 +1883,11 @@ void Snapshotter::finalizeCapture(
     RCLCPP_WARN(get_logger(), "%s", message.c_str());
   }
 
-  // Where the file actually ends up. Recorded data is never deleted just
-  // because a capture didn't fully complete (a robot shutting down
-  // mid-recording is exactly this case), so a canceled capture or a topic
-  // that failed to write is still saved, at a clearly distinct path from a
-  // full success (see partialPathFor()'s own comment for why). Only an
-  // actual close() failure leaves the file at its staging path, since its
-  // integrity can't be vouched for.
+  // Where the file actually ends up. A failed or canceled capture is kept at
+  // partialPathFor(); only a close() failure leaves it at the staging path.
   std::filesystem::path saved_path = capture.staging_path;
   if (file_is_valid && !capture.flat_output) {
-    // Default: rosbag2's usual bag-directory layout, for a caller that
-    // doesn't ask for flat_output and instead reads a capture back at the
-    // fixed <filename>/<basename>_0.mcap path rosbag2 always writes to.
+    // Directory layout: <filename>/<basename>_0.mcap plus metadata.yaml.
     saved_path = success ? capture.final_path : partialPathFor(capture.final_path);
     std::error_code ec;
     std::filesystem::rename(capture.staging_path, saved_path, ec);
@@ -2231,10 +2154,8 @@ void Snapshotter::pollTopics()
 
 void Snapshotter::pollAndResolveTopics()
 {
-  // Profile topics resolve first, so a topic a profile wants (with its
-  // adapted QoS) is never grabbed first by all_topics_'s generic, non-adaptive
-  // QoS(5) default; isBuffered() only prevents a double subscription, it
-  // doesn't pick which side wins the race, so the order here decides that.
+  // Profile topics first, so they subscribe with adapted QoS before
+  // all_topics_ can take them with its default QoS(5).
   resolvePendingProfileTopics();
   if (options_.all_topics_) {
     pollTopics();
@@ -2279,9 +2200,6 @@ bool Snapshotter::subscribeResolvedTopic(
   subscribe(details, queue);
   RCLCPP_INFO(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
   if (state_pub_) {
-    // Defensive: publishers are created before subscribeProfileTopics() runs
-    // in the constructor, but guard anyway since this method can also be
-    // reached from that same constructor call chain.
     publishState();
   }
   return true;

@@ -47,7 +47,7 @@ if(foxglove_msgs_FOUND AND LIBAV_FOUND)
   set(ROSBAG2_SNAPSHOT_HAVE_H264 TRUE)
 else()
   set(ROSBAG2_SNAPSHOT_HAVE_H264 FALSE)
-  message(WARNING "rosbag2_snapshot: foxglove_msgs and/or FFmpeg not found -- "
+  message(WARNING "rosbag2_snapshot: foxglove_msgs and/or FFmpeg not found; "
                    "building without H264 image compression (JPG/PNG still available)")
 endif()
 
@@ -142,7 +142,7 @@ if(BUILD_TESTING)
   target_include_directories(test_capture_profiles PRIVATE include)
   target_link_libraries(test_capture_profiles yaml-cpp)
 
-  # Pure/ROS-free, exercises only stagingPathFor() from snapshotter.hpp.
+  # Pure/ROS-free, exercises only staging_path.hpp.
   ament_add_gtest(test_staging_path
     test/test_staging_path.cpp
   )

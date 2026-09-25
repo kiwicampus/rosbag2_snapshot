@@ -278,7 +278,7 @@ void FFMPEGEncoder::doOpenCodec(int width, int height)
   packet_->data = NULL;
   packet_->size = 0;
 
-  // Wraps the incoming raw BGR24 image so sws_scale() can convert it in place.
+  // Wraps the incoming BGR24 image without copying, as sws_scale()'s source.
   wrapperFrame_ = av_frame_alloc();
   wrapperFrame_->width = width;
   wrapperFrame_->height = height;
@@ -312,7 +312,7 @@ void FFMPEGEncoder::encodeImage(const cv::Mat & img, const Header & header, cons
   Lock lock(mutex_);
   rclcpp::Time t1, t2, t3;
 
-  // bend the memory pointers in colorFrame to the right locations
+  // Point wrapperFrame_ at img's pixel data.
   av_image_fill_arrays(
     wrapperFrame_->data, wrapperFrame_->linesize, &(img.data[0]),
     static_cast<AVPixelFormat>(wrapperFrame_->format), wrapperFrame_->width, wrapperFrame_->height,

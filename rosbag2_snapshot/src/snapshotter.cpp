@@ -525,6 +525,10 @@ void MessageQueue::_clear()
     RCLCPP_INFO(logger_, "Not clearing queue for topic %s because duration is set to %f", sub_->get_topic_name(), options_.duration_limit_.seconds());
     return;
   }
+  // Handed back to the shared budget, which must always match what the queues hold.
+  if (shared_budget_ != nullptr) {
+    shared_budget_->release(size_);
+  }
   try {
     queue_.clear();
     size_ = 0;

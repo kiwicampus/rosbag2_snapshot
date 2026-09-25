@@ -183,6 +183,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_forward_follow PRIVATE include)
   target_link_libraries(test_forward_follow ${library_name})
+
+  ament_add_gtest(test_message_queue_budget
+    test/test_message_queue_budget.cpp
+  )
+  target_include_directories(test_message_queue_budget PRIVATE include)
+  target_link_libraries(test_message_queue_budget ${library_name})
 endif()
 
 ament_package()

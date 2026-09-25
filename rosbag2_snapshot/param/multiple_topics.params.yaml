@@ -1,13 +1,13 @@
 /**:
   ros__parameters:
-    topics: ["/lidar1/points_raw", "/lidar2/points_raw", "/camera1/image"]
+    topics: ["/points", "/odom", "/camera/image_raw"]
     topic_details:
-      /lidar1/points_raw:
+      /points:
         type: "sensor_msgs/msg/PointCloud2"
-      /lidar2/points_raw:
-        type: "sensor_msgs/msg/PointCloud2"
+      /odom:
+        type: "nav_msgs/msg/Odometry"
         duration: 10.0
-      /camera1/image:
+      /camera/image_raw:
         type: "sensor_msgs/msg/Image"
         duration: 15.0
-        memory: 1024.0
+        memory: 200000000.0  # bytes (200 MB); default_memory_limit is in MB

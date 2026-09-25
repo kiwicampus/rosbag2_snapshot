@@ -33,12 +33,9 @@ find_package(yaml-cpp REQUIRED)
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
 
-# H264 image compression needs foxglove_msgs (FFMPEGEncoder's output type) on
-# top of OpenCV/cv_bridge/FFmpeg: not published for every ROS distro/OS
-# combination this package builds on. JPG/PNG compression (OpenCV/cv_bridge
-# alone) stays available either way; only the H264 path is compiled out when
-# it's missing, same pattern this package's own consumers use elsewhere for
-# an optional heavy dependency (e.g. object_detection's ONNX Runtime stub).
+# H264 image compression needs foxglove_msgs (FFMPEGEncoder's output type) and
+# the FFmpeg libraries; it is enabled only when both are found. JPG/PNG
+# compression (OpenCV/cv_bridge) is always available.
 find_package(foxglove_msgs QUIET)
 pkg_check_modules(LIBAV QUIET IMPORTED_TARGET
     libavcodec

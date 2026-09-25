@@ -1,8 +1,6 @@
 # goal definition
-string filename                      # Bag name. Ending in .bag saves exactly that name;
-                                     # otherwise the current datetime + .bag is appended
-                                     #   "test" -> test2018-05-23-10-04-20.bag
-                                     #   "test.bag" -> test.bag
+string filename                      # Output path, used as given. Must end in .bag or .mcap;
+                                     # any other name is rejected at goal acceptance
 TopicDetails[] topics                # Topics to include. Empty = every buffered topic
 builtin_interfaces/Time start_time   # Earliest message to include. time(0) = each topic's oldest buffered message
 builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message

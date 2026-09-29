@@ -98,7 +98,7 @@ bool topic_uses_interval_single_msg_narrowing(const TopicDetails & details)
   if (details.type == "visualization_msgs/msg/ImageMarker") {
     return true;
   }
-  if (details.type == "usr_msgs/msg/Detections") {
+  if (details.type == "detection_msgs/msg/Detections") {
     return true;
   }
   if (details.type == "sensor_msgs/msg/Image" && details.img_compression_opts_.use_compression) {
@@ -146,7 +146,7 @@ MessageQueue::range_t narrow_range_for_interval_single_msg(
         ser_marker.deserialize_message(it->msg.get(), &marker);
         sem_builtin = marker.header.stamp;
         candidate_rt = semantic_time_or_receive(marker.header.stamp, it->time);
-      } else if (topic_details.type == "usr_msgs/msg/Detections") {
+      } else if (topic_details.type == "detection_msgs/msg/Detections") {
         detection_msgs::msg::Detections dets;
         ser_detections.deserialize_message(it->msg.get(), &dets);
         sem_builtin = dets.header.stamp;

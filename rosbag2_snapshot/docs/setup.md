@@ -118,6 +118,9 @@ frame. libx264's own defaults buffer tens of frames, so a short capture (a few
 seconds of a low-rate camera) wrote only empty messages; a frame that still
 yields no packet is skipped, never written empty.
 
+FFmpeg/libx264 messages (per-encoder setup and stats) print only when the node
+runs at DEBUG; warnings and errors always show.
+
 A topic written as H264 is stored as `foxglove_msgs/msg/CompressedVideo`.
 H264 applies only to topics that are compressed (`compression.enabled`, or a
 profile `compression` other than `none`); it is selected per goal with

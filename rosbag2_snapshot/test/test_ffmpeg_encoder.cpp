@@ -65,3 +65,17 @@ TEST_F(FFMPEGEncoderTest, TakeClearsThePacket)
   EXPECT_TRUE(encoder.takeCompressedImage(out));
   EXPECT_FALSE(encoder.takeCompressedImage(out));
 }
+
+TEST_F(FFMPEGEncoderTest, FFmpegLogsOnlyAtDebug)
+{
+  auto node = std::make_shared<rclcpp::Node>("test_ffmpeg_encoder_log");
+  FFMPEGEncoder encoder;
+
+  node->get_logger().set_level(rclcpp::Logger::Level::Info);
+  encoder.setParameters(node.get(), "h264.");
+  EXPECT_EQ(av_log_get_level(), AV_LOG_WARNING);
+
+  node->get_logger().set_level(rclcpp::Logger::Level::Debug);
+  encoder.setParameters(node.get(), "h264.");
+  EXPECT_EQ(av_log_get_level(), AV_LOG_INFO);
+}

@@ -33,6 +33,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/log.h>
 #include <libavutil/opt.h>
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>

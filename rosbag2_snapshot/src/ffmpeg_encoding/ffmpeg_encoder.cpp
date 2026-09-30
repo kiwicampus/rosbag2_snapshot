@@ -85,6 +85,10 @@ AVPixelFormat FFMPEGEncoder::pixelFormat(const std::string & f) const
 void FFMPEGEncoder::setParameters(rclcpp::Node * node, const std::string ns)
 {
   Lock lock(mutex_);
+  // libx264 prints its setup and stats per encoder at INFO; show them only at DEBUG.
+  av_log_set_level(
+    node->get_logger().get_effective_level() <= rclcpp::Logger::Level::Debug ? AV_LOG_INFO
+                                                                               : AV_LOG_WARNING);
   codecName_ = get_safe_param<std::string>(node, ns + "encoding", "libx264");
   profile_ = get_safe_param<std::string>(node, ns + "profile", "");
   preset_ = get_safe_param<std::string>(node, ns + "preset", "ultrafast");

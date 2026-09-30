@@ -144,12 +144,12 @@ void FFMPEGEncoder::openVAAPIDevice(const AVCodec * codec, int width, int height
     const auto fmts = utils::get_hwframe_transfer_formats(hw_frames_ref);
     frames_ctx->sw_format = utils::get_preferred_pixel_format("h264_vaapi", fmts);
     if (pixFormat_ != AV_PIX_FMT_NONE) {
-      RCLCPP_INFO_STREAM(
+      RCLCPP_DEBUG_STREAM(
         logger_, "user overriding software pix fmt " << utils::pix(frames_ctx->sw_format));
-      RCLCPP_INFO_STREAM(logger_, "with " << utils::pix(pixFormat_));
+      RCLCPP_DEBUG_STREAM(logger_, "with " << utils::pix(pixFormat_));
       frames_ctx->sw_format = pixFormat_;  // override default at your own risk!
     } else {
-      RCLCPP_INFO_STREAM(
+      RCLCPP_DEBUG_STREAM(
         logger_, "using software pixel format: " << utils::pix(frames_ctx->sw_format));
     }
     if (frames_ctx->sw_format == AV_PIX_FMT_NONE) {
@@ -183,7 +183,7 @@ bool FFMPEGEncoder::openCodec(int width, int height)
     closeCodec();
     return (false);
   }
-  RCLCPP_INFO_STREAM(
+  RCLCPP_DEBUG_STREAM(
     logger_, "intialized H264 codec " << codecName_ << " for image: " << width << "x" << height);
   return (true);
 }
@@ -248,7 +248,7 @@ void FFMPEGEncoder::doOpenCodec(int width, int height)
   err = avcodec_open2(codecContext_, codec, NULL);
   utils::check_for_err("cannot open codec", err);
 
-  RCLCPP_INFO_STREAM(logger_, "opened codec: " << codecName_);
+  RCLCPP_DEBUG_STREAM(logger_, "opened codec: " << codecName_);
   frame_ = av_frame_alloc();
   if (!frame_) {
     throw(std::runtime_error("cannot alloc software frame!"));
@@ -385,7 +385,7 @@ foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
 void FFMPEGEncoder::printTimers(const std::string & prefix) const
 {
   Lock lock(mutex_);
-  RCLCPP_INFO_STREAM(
+  RCLCPP_DEBUG_STREAM(
     logger_, prefix << " pktsz: " << totalOutBytes_ / frameCnt_ << " compr: "
                     << totalInBytes_ / (double)totalOutBytes_ << " debay: " << tdiffDebayer_
                     << " fmcp: " << tdiffFrameCopy_ << " send: " << tdiffSendFrame_

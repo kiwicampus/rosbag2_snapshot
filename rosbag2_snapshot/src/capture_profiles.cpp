@@ -253,7 +253,9 @@ ProfileParseResult loadProfilesDir(const std::string & dir)
     }
 
     raw[profile.name] = profile;
+    result.files.push_back(entry.path().string());
   }
+  std::sort(result.files.begin(), result.files.end());
 
   // Resolved as a second pass over the whole directory, so a profile can
   // include one defined in another file regardless of file iteration order.

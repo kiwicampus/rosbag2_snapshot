@@ -70,6 +70,8 @@ struct ProfileParseResult
   // the directory down.
   bool ok = true;
   std::vector<std::string> warnings;
+  // Profile files that parsed, sorted.
+  std::vector<std::string> files;
   ProfileSet profiles;
 };
 

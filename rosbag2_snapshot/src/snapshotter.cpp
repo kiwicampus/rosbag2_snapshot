@@ -410,7 +410,7 @@ MessageQueue::range_t narrow_range_for_interval_single_msg(
   MessageQueue::range_t::first_type chosen = range.second;
   if (exact_it != range.second) {
     chosen = exact_it;
-    RCLCPP_INFO(
+    RCLCPP_DEBUG(
       logger, "[INTERVAL_MODE]: single_msg exact stamp match on topic %s",
       topic_details.name.c_str());
   } else if (closest_it != range.second) {
@@ -522,7 +522,7 @@ void MessageQueue::clear()
 void MessageQueue::_clear()
 {
   if (options_.duration_limit_.seconds() <= 0.0) {
-    RCLCPP_INFO(logger_, "Not clearing queue for topic %s because duration is set to %f", sub_->get_topic_name(), options_.duration_limit_.seconds());
+    RCLCPP_DEBUG(logger_, "Not clearing queue for topic %s because duration is set to %f", sub_->get_topic_name(), options_.duration_limit_.seconds());
     return;
   }
   // Handed back to the shared budget, which must always match what the queues hold.
@@ -829,7 +829,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
     bool use_compression = declare_parameter<bool>(prefix + ".compression.enabled");
     img_compression_opts.use_compression = use_compression;
   } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
-    RCLCPP_INFO(get_logger(), "Not using image compression for topic %s", topic.c_str());
+    RCLCPP_DEBUG(get_logger(), "Not using image compression for topic %s", topic.c_str());
     img_compression_opts.use_compression = false;
     return img_compression_opts;
   }
@@ -840,7 +840,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
       std::string compression_format = declare_parameter<std::string>(prefix + ".compression.format");
       img_compression_opts.format = compression_format;
     } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
-      RCLCPP_INFO(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
+      RCLCPP_DEBUG(get_logger(), "Compression enabled for topic %s but compression format not specified, using jpg with default quality", topic.c_str());
       img_compression_opts.format = "jpg";
       img_compression_opts.imwrite_flag_value = 95;
       img_compression_opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
@@ -855,7 +855,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
         int jpg_quality = declare_parameter<int>(prefix + ".compression.jpg_quality");
         img_compression_opts.imwrite_flag_value = jpg_quality;
       } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
-        RCLCPP_INFO(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
+        RCLCPP_DEBUG(get_logger(), "jpg compression enabled for topic %s but quality not specified, using jpg with default quality", topic.c_str());
         img_compression_opts.imwrite_flag_value = 95;
       }
     }
@@ -866,7 +866,7 @@ ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
         int png_compression_level = declare_parameter<int>(prefix + ".compression.png_compression");
         img_compression_opts.imwrite_flag_value = png_compression_level;
       } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
-        RCLCPP_INFO(get_logger(), "png compression enabled for topic %s but compression not specified, using png with default compression", topic.c_str());
+        RCLCPP_DEBUG(get_logger(), "png compression enabled for topic %s but compression not specified, using png with default compression", topic.c_str());
         img_compression_opts.imwrite_flag_value = 3;
       }
     }
@@ -966,6 +966,9 @@ void Snapshotter::parseOptionsFromParams()
       RCLCPP_WARN(get_logger(), "capture_profiles_dir: %s", warning.c_str());
     }
     profiles_.profiles = parsed.profiles.profiles;
+    for (const auto & file : parsed.files) {
+      RCLCPP_INFO(get_logger(), "Loaded capture profile file %s", file.c_str());
+    }
     RCLCPP_INFO(
       get_logger(), "Loaded %zu capture profile(s) from %s",
       profiles_.profiles.size(), options_.capture_profiles_dir_.c_str());
@@ -1328,7 +1331,7 @@ bool Snapshotter::writeTopic(
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
     if (use_h264)
     {
-      RCLCPP_INFO(get_logger(), "H264 enabled for topic %s. applying h264 compression", topic_details.name.c_str());
+      RCLCPP_DEBUG(get_logger(), "H264 enabled for topic %s. applying h264 compression", topic_details.name.c_str());
       tm.type = "foxglove_msgs/msg/CompressedVideo";
     }
     else
@@ -1343,7 +1346,7 @@ bool Snapshotter::writeTopic(
     }
 #endif
     {
-      RCLCPP_INFO(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
+      RCLCPP_DEBUG(get_logger(), "topic %s is an image. applying %s compression", topic_details.name.c_str(), topic_details.img_compression_opts_.format.c_str() );
       compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag);
       compression_params.push_back(topic_details.img_compression_opts_.imwrite_flag_value); // Set JPEG quality (0-100) or png compression (0-9)
       tm.type = "sensor_msgs/msg/CompressedImage";
@@ -1374,7 +1377,7 @@ bool Snapshotter::writeTopic(
   if(topic_details.queue_depth > 0 && !req->use_interval_mode)
   {
     range.first = std::max(range.first, range.second - topic_details.queue_depth);
-    RCLCPP_INFO(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
+    RCLCPP_DEBUG(get_logger(), "Only %li messages will be saved on topic %s. its queue size set in the params is %i", range.second - range.first, topic_details.name.c_str(), topic_details.queue_depth);
     if(topic_details.throttle_period > 0.0 && !h264_throttle_skip)
     {
       RCLCPP_ERROR(get_logger(), "Topic %s has a queue size of %i but has a throttle period of %f. This may have unexpected consequences",topic_details.name.c_str(), topic_details.queue_depth, topic_details.throttle_period);
@@ -1581,7 +1584,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
-  RCLCPP_INFO(
+  RCLCPP_DEBUG(
     get_logger(), "opening %s (staging at %s)",
     req->filename.c_str(), staging_path.string().c_str());
 
@@ -2065,7 +2068,7 @@ void Snapshotter::resume()
 {
   clear();
   recording_ = true;
-  RCLCPP_INFO(get_logger(), "Buffering resumed");
+  RCLCPP_DEBUG(get_logger(), "Buffering resumed");
 }
 
 void Snapshotter::enableCb(
@@ -2202,7 +2205,7 @@ bool Snapshotter::subscribeResolvedTopic(
     buffers_.emplace(details, queue);
   }
   subscribe(details, queue);
-  RCLCPP_INFO(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
+  RCLCPP_DEBUG(get_logger(), "Buffering profile topic %s (%s)", name.c_str(), type.c_str());
   if (state_pub_) {
     publishState();
   }

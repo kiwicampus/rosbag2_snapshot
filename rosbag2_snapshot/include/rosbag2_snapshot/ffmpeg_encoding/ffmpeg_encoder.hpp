@@ -120,9 +120,10 @@ public:
   // ------- performance statistics
   void printTimers(const std::string & prefix) const;
   void resetTimers();
-  // Returns the most recently encoded packet, or a default-constructed one if
-  // nothing has been encoded yet. Polled by rosbag2_snapshot; callback_ is unused.
-  foxglove_msgs::msg::CompressedVideo getCompressedImage();
+  // Moves out the packet the last encodeImage() produced. False, leaving `out`
+  // untouched, when the encoder emitted none (lookahead/threading delay), so a
+  // caller never writes an empty or repeated frame. callback_ is unused.
+  bool takeCompressedImage(foxglove_msgs::msg::CompressedVideo & out);
 
 private:
   using PTSMap = std::unordered_map<int64_t, rclcpp::Time>;

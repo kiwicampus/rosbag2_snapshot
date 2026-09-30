@@ -189,6 +189,15 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_message_queue_budget PRIVATE include)
   target_link_libraries(test_message_queue_budget ${library_name})
+
+  if(ROSBAG2_SNAPSHOT_HAVE_H264)
+    ament_add_gtest(test_ffmpeg_encoder
+      test/test_ffmpeg_encoder.cpp
+    )
+    target_include_directories(test_ffmpeg_encoder PRIVATE include)
+    target_link_libraries(test_ffmpeg_encoder encoder PkgConfig::LIBAV)
+    ament_target_dependencies(test_ffmpeg_encoder ${DEPENDENCIES})
+  endif()
 endif()
 
 ament_package()

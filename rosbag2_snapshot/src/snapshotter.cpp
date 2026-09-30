@@ -1467,9 +1467,15 @@ bool Snapshotter::writeTopic(
 
         foxglove_msgs::msg::CompressedVideo compressed_img;
         capture_encoder->encodeImage(cv_img, raw_img.header, now());
-        compressed_img = capture_encoder->getCompressedImage();
-        compressed_img.timestamp = raw_img.header.stamp;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        if (capture_encoder->takeCompressedImage(compressed_img))
+        {
+          compressed_img.timestamp = raw_img.header.stamp;
+          bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        }
+        else
+        {
+          RCLCPP_DEBUG(get_logger(), "No H264 packet yet for %s; frame skipped", tm.name.c_str());
+        }
       }
       else
 #endif

@@ -87,8 +87,8 @@ void FFMPEGEncoder::setParameters(rclcpp::Node * node, const std::string ns)
   Lock lock(mutex_);
   codecName_ = get_safe_param<std::string>(node, ns + "encoding", "libx264");
   profile_ = get_safe_param<std::string>(node, ns + "profile", "");
-  preset_ = get_safe_param<std::string>(node, ns + "preset", "");
-  tune_ = get_safe_param<std::string>(node, ns + "tune", "");
+  preset_ = get_safe_param<std::string>(node, ns + "preset", "ultrafast");
+  tune_ = get_safe_param<std::string>(node, ns + "tune", "zerolatency");
   delay_ = get_safe_param<std::string>(node, ns + "delay", "");
   qmax_ = get_safe_param<int>(node, ns + "qmax", 10);
   bitRate_ = get_safe_param<int64_t>(node, ns + "bit_rate", 8242880);
@@ -373,13 +373,15 @@ int FFMPEGEncoder::drainPacket(const Header & header, int width, int height)
   return (ret);
 }
 
-foxglove_msgs::msg::CompressedVideo FFMPEGEncoder::getCompressedImage()
+bool FFMPEGEncoder::takeCompressedImage(foxglove_msgs::msg::CompressedVideo & out)
 {
   Lock lock(mutex_);
-  if (pptr_) {
-      return (*pptr_);
+  if (!pptr_) {
+    return (false);
   }
-  return (foxglove_msgs::msg::CompressedVideo());
+  out = *pptr_;
+  pptr_.reset();
+  return (true);
 }
 
 void FFMPEGEncoder::printTimers(const std::string & prefix) const

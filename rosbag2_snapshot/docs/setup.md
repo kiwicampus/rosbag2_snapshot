@@ -105,13 +105,18 @@ One set for the whole node. Read only in an H264 build.
 |---|---|
 | `h264.encoding` | `"libx264"` |
 | `h264.profile` | `""` |
-| `h264.preset` | `""` |
-| `h264.tune` | `""` |
+| `h264.preset` | `"ultrafast"` |
+| `h264.tune` | `"zerolatency"` |
 | `h264.delay` | `""` |
 | `h264.qmax` | `10` |
 | `h264.bit_rate` | `8242880` |
 | `h264.gop_size` | `15` |
 | `h264.pixel_format` | `""` |
+
+The `ultrafast`/`zerolatency` defaults make the encoder emit one packet per
+frame. libx264's own defaults buffer tens of frames, so a short capture (a few
+seconds of a low-rate camera) wrote only empty messages; a frame that still
+yields no packet is skipped, never written empty.
 
 A topic written as H264 is stored as `foxglove_msgs/msg/CompressedVideo`.
 H264 applies only to topics that are compressed (`compression.enabled`, or a

@@ -64,6 +64,7 @@
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #endif
 #include "rosbag2_snapshot/accepted_filename.hpp"
+#include "rosbag2_snapshot/capture_content.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
 #include "rosbag2_snapshot/forward_capture.hpp"
 #include "rosbag2_snapshot/profile_topic_details.hpp"
@@ -439,13 +440,15 @@ private:
   // False if a message timestamp can't be taken or the H264 encoder fails to
   // initialize. force_throttle: apply throttle_period even if
   // req->throttle_msgs is false; set for a profile topic with its own
-  // max_rate_hz.
+  // max_rate_hz. content, when set, records the topic and every message
+  // written.
   bool writeTopic(
     rosbag2_cpp::Writer & bag_writer, MessageQueue & message_queue,
     const TopicDetails & topic_details,
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
     rclcpp::Time& request_time,
-    bool force_throttle = false);
+    bool force_throttle = false,
+    CaptureContent * content = nullptr);
 
   // Applies the goal's own per-topic overrides on top of the buffered topic's details.
   void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);
@@ -490,6 +493,8 @@ private:
     std::string profile;
     // req->use_flat_output, copied for use off the executor thread.
     bool flat_output{false};
+    // Filled by writeTopic(); reported on the capture event.
+    CaptureContent content;
   };
 
   void createBag(PendingCapture capture);

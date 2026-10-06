@@ -307,8 +307,17 @@ profile topic starts buffering. It uses volatile QoS with depth 1, so a late
 subscriber sees nothing until the next change.
 
 `snapshot_capture_event` (depth 10) carries one message per finished
-capture: `filename`, `profile`, `success`, `message`, `topics_written`,
-`duration`, `stamp`.
+capture:
+
+| Field | Meaning |
+|---|---|
+| `filename` | Path the bag was saved to (`.partial` suffix when it ended early) |
+| `profile` | The goal's profile, empty when none |
+| `success`, `message` | Outcome; `message` is the path on success, the reason otherwise |
+| `topics_written` | Topics the capture went through, skipped ones included |
+| `duration`, `stamp` | Seconds since the goal was accepted; publish time |
+| `content_topics`, `content_message_counts` | Every topic the bag declares and the messages written on it (parallel arrays; 0 for a declared topic with none) |
+| `first_message_stamp`, `last_message_stamp` | Receipt time of the first and last message written; zero when the bag holds none |
 
 ## Pause and resume
 

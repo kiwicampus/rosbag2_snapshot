@@ -148,6 +148,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_staging_path PRIVATE include)
 
+  # Pure/ROS-free, exercises only capture_content.hpp.
+  ament_add_gtest(test_capture_content
+    test/test_capture_content.cpp
+  )
+  target_include_directories(test_capture_content PRIVATE include)
+
   # Pure/ROS-free, exercises only forward_capture.hpp.
   ament_add_gtest(test_forward_capture
     test/test_forward_capture.cpp

@@ -1273,7 +1273,8 @@ bool Snapshotter::writeTopic(
   const TopicDetails & topic_details,
   const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,
   rclcpp::Time& request_time,
-  bool force_throttle)
+  bool force_throttle,
+  CaptureContent * content)
 {
   auto req = goal_handle->get_goal();
   MessageQueue::range_t range;
@@ -1363,6 +1364,9 @@ bool Snapshotter::writeTopic(
       get_logger(), "no message definition for %s (%s): %s; the bag will carry no schema for it",
       tm.name.c_str(), tm.type.c_str(), e.what());
     bag_writer.create_topic(tm);
+  }
+  if (content != nullptr) {
+    content->addTopic(tm.name);
   }
 
   double prev_msg_time = 0.0;
@@ -1471,6 +1475,9 @@ bool Snapshotter::writeTopic(
         {
           compressed_img.timestamp = raw_img.header.stamp;
           bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+          if (content != nullptr) {
+            content->recordMessage(tm.name, msg_it->time.nanoseconds());
+          }
         }
         else
         {
@@ -1485,6 +1492,9 @@ bool Snapshotter::writeTopic(
         compressed_img.format = topic_details.img_compression_opts_.format;
         compressed_img.header = raw_img.header;
         bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        if (content != nullptr) {
+          content->recordMessage(tm.name, msg_it->time.nanoseconds());
+        }
       }
     }
     else
@@ -1493,6 +1503,9 @@ bool Snapshotter::writeTopic(
         msg_it->msg->get_rcl_serialized_message()
       );
       bag_writer.write(bag_message);
+      if (content != nullptr) {
+        content->recordMessage(tm.name, msg_it->time.nanoseconds());
+      }
     }
   }
   auto end = std::chrono::high_resolution_clock::now();
@@ -1802,7 +1815,10 @@ void Snapshotter::createBag(PendingCapture capture)
       // Force throttling only when the profile set max_rate_hz for this topic
       // (throttle_period != -1), not for a throttle_period configured statically.
       bool force_topic_throttle = use_profile && topic.throttle_period != -1.0;
-      if (!writeTopic(*bag_writer_ptr, *message_queue, details, goal_handle, request_time, force_topic_throttle)) {
+      if (!writeTopic(
+          *bag_writer_ptr, *message_queue, details, goal_handle, request_time,
+          force_topic_throttle, &capture.content))
+      {
         success = false;
         message = "Failed to write topic " + topic.type + " to bag file.";
         break;
@@ -1825,7 +1841,10 @@ void Snapshotter::createBag(PendingCapture capture)
       count_topics++;
       std::shared_ptr<MessageQueue> message_queue = pair.second;
       message_queue->refreshBuffer(request_time);
-      if (!writeTopic(*bag_writer_ptr, *message_queue, pair.first, goal_handle, request_time)) {
+      if (!writeTopic(
+          *bag_writer_ptr, *message_queue, pair.first, goal_handle, request_time, false,
+          &capture.content))
+      {
         success = false;
         message = "Failed to write topic " + pair.first.name + " to bag file.";
         break;
@@ -1979,6 +1998,10 @@ void Snapshotter::finalizeCapture(
   event->topics_written = static_cast<uint32_t>(topics_written);
   event->duration = static_cast<float>((stamp - request_time).seconds());
   event->stamp = stamp;
+  event->content_topics = capture.content.topics();
+  event->content_message_counts = capture.content.counts();
+  event->first_message_stamp = rclcpp::Time(capture.content.firstReceiptNs(), RCL_ROS_TIME);
+  event->last_message_stamp = rclcpp::Time(capture.content.lastReceiptNs(), RCL_ROS_TIME);
   capture_event_pub_->publish(*event);
 
   publishState();

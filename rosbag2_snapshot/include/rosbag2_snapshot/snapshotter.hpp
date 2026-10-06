@@ -41,7 +41,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <usr_msgs/msg/detections.hpp>
+#include <detection_msgs/msg/detections.hpp>
 #include <visualization_msgs/msg/image_marker.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>

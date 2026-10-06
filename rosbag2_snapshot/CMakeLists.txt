@@ -30,6 +30,7 @@ find_package(usr_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(cloudini_lib REQUIRED)
 find_package(point_cloud_interfaces REQUIRED)
+find_package(detection_msgs REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
@@ -62,6 +63,7 @@ set(DEPENDENCIES
   usr_msgs
   visualization_msgs
   point_cloud_interfaces
+  detection_msgs
 )
 
 set(executable_name snapshotter)

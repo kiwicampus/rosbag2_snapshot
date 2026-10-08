@@ -25,8 +25,9 @@
   <depend>foxglove_msgs</depend>
   <depend>usr_msgs</depend>
   <depend>visualization_msgs</depend>
+  <depend>cloudini_lib</depend>
+  <depend>point_cloud_interfaces</depend>
   <depend>detection_msgs</depend>
-
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

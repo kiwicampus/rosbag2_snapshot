@@ -46,6 +46,7 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <cloudini_lib/ros_msg_utils.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -78,6 +79,14 @@ struct ImageCompressionOptions
   std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
 };
 
+/* Configuration for cloudini compression of a PointCloud2 topic
+ */
+struct PointcloudCompressionOptions
+{
+  bool use_compression = false; // whether to encode PointCloud2 messages with cloudini
+  double resolution = 0.001; // quantization resolution in meters for FLOAT32 fields
+};
+
 struct TopicDetails
 {
   std::string name;
@@ -89,6 +98,8 @@ struct TopicDetails
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
   // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
+  // compression options for PointCloud2 topics;
+  PointcloudCompressionOptions pc_compression_opts_;
   // max time between messages to save (in seconds)
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
@@ -352,6 +363,8 @@ private:
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
+  // Get the configuration of cloudini compression for a given PointCloud2 topic
+  PointcloudCompressionOptions getPointcloudCompressionOptions(std::string topic);
   // Iter through the message queue and write the messages to the bag
   void createBag(
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,

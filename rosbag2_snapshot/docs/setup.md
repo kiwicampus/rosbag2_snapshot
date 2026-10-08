@@ -25,9 +25,9 @@ colcon build --symlink-install --packages-up-to rosbag2_snapshot
 
 H264 is built only when CMake finds both `foxglove_msgs` and the four FFmpeg
 libraries; otherwise it prints a warning and builds without H264. FFmpeg is
-found with pkg-config. CMake sets `PKG_CONFIG_PATH` to the CMake variable
-`FFMPEG_PKGCONFIG` (empty when unset), so an exported `PKG_CONFIG_PATH` is
-ignored. For an FFmpeg outside the default search path:
+found with pkg-config, through an exported `PKG_CONFIG_PATH` or the CMake
+variable `FFMPEG_PKGCONFIG`, which is searched first. For an FFmpeg outside the
+default search path:
 
 ```bash
 colcon build --symlink-install --packages-up-to rosbag2_snapshot \
@@ -86,8 +86,8 @@ for a `double`) fails node startup.
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `default_duration_limit` | double | `-1.0` | Per-topic buffer age limit, seconds. `-1` = no age limit (see [Buffer limits](#buffer-limits)) |
-| `default_memory_limit` | double | `300.0` | Per-topic buffer size limit, whole MB (1 MB = 1,000,000 bytes; the fractional part is dropped). Negative = no limit. `0` drops every message of the topics that inherit it |
-| `total_memory_limit` | double | `0.0` | Cap across all buffers combined, whole MB (fractional part dropped, so `0.5` = no cap). `<= 0` = no shared cap |
+| `default_memory_limit` | double | `300.0` | Per-topic buffer size limit, MB (1 MB = 1,000,000 bytes; fractions allowed). Negative = no limit. `0` drops every message of the topics that inherit it |
+| `total_memory_limit` | double | `0.0` | Cap across all buffers combined, MB (fractions allowed). `<= 0` = no shared cap |
 | `max_post_duration_s` | double | `300.0` | Longest accepted `post_duration_s`. `<= 0` disables forward captures |
 | `rosbag_preset_profile` | string | `"zstd_small"` | MCAP storage preset used when a goal leaves its own empty: `none`, `fastwrite`, `zstd_fast` or `zstd_small`. Any other value makes every goal using it abort |
 | `interval_single_msg_types` | string[] | `[]` | Extra message types narrowed to one message by `interval_mode_single_msg` |
@@ -159,8 +159,8 @@ first frames of every capture. The defaults emit one packet per frame.
 Fallbacks: without an H264 build, or for a topic that has no encoder (a topic
 found by all-topics discovery, or a `topic_details` image topic without
 `compression.enabled`), `use_h264` writes the topic's JPG/PNG setting, and
-`compression: h264` or `format: h264` writes JPG at the topic's existing
-`jpg_quality` (`95` unless configured).
+`compression: h264` or `format: h264` writes JPG at the topic's `jpg_quality`
+(`95` for a PNG topic or when not configured).
 
 FFmpeg messages (per-encoder setup and stats) print only when the node logger
 is at DEBUG when an encoder is set up at topic subscription; warnings and
@@ -282,7 +282,8 @@ capture. Entries are matched by `name`; `type` is ignored. A field left at
 | `include_post_trigger` | int8 | `-1` | `0` or `1` |
 
 Changing `format` without the matching quality field keeps the topic's current
-value, whichever format it was set for. A selected profile applies its topic
+value when the topic already uses that format, and otherwise uses the default
+(`95` for JPG, `3` for PNG). A selected profile applies its topic
 keys as these same overrides.
 
 ### Result and feedback
@@ -376,11 +377,8 @@ against it.
 
 When a goal sets `start_time` or `stop_time`, a topic with
 `override_old_timestamps: true` or `old_messages_to_keep > 0` writes its
-older messages with `start_time` as their bag timestamp. With `stop_time` at
-`0`, older means before `start_time`. With `stop_time` set, older means
-received before `request_time - (stop_time - start_time)`, where
-`request_time` is when the capture started. A goal with both times at `0`
-keeps every message's own timestamp.
+messages received before `start_time` with `start_time` as their bag
+timestamp. A goal with both times at `0` keeps every message's own timestamp.
 
 ## Status topics
 

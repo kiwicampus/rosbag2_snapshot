@@ -440,7 +440,6 @@ const rclcpp::Duration SnapshotterTopicOptions::NO_DURATION_LIMIT = rclcpp::Dura
 const int64_t SnapshotterTopicOptions::NO_MEMORY_LIMIT = -1;
 const rclcpp::Duration SnapshotterTopicOptions::INHERIT_DURATION_LIMIT = rclcpp::Duration(0s);
 const int64_t SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT = 0;
-static constexpr uint32_t MB_TO_B = 1e6;
 
 SnapshotterTopicOptions::SnapshotterTopicOptions(
   rclcpp::Duration duration_limit,
@@ -900,7 +899,7 @@ void Snapshotter::parseOptionsFromParams()
 
   try {
     options_.default_memory_limit_ =
-      declare_parameter<double>("default_memory_limit", 300.0);
+      megabytesToBytes(declare_parameter<double>("default_memory_limit", 300.0));
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "default_memory_limit is of incorrect type.");
     throw ex;
@@ -914,20 +913,13 @@ void Snapshotter::parseOptionsFromParams()
     throw ex;
   }
 
-  if (options_.default_memory_limit_ != -1.0) {
-    options_.default_memory_limit_ *= MB_TO_B;
-  }
-
   try {
     // 0 = no shared cap across topics.
     options_.total_memory_limit_ =
-      static_cast<int64_t>(declare_parameter<double>("total_memory_limit", 0.0));
+      megabytesToBytes(declare_parameter<double>("total_memory_limit", 0.0));
   } catch (const rclcpp::ParameterTypeException & ex) {
     RCLCPP_ERROR(get_logger(), "total_memory_limit is of incorrect type.");
     throw ex;
-  }
-  if (options_.total_memory_limit_ > 0) {
-    options_.total_memory_limit_ *= MB_TO_B;
   }
 
   try {
@@ -1395,11 +1387,8 @@ bool Snapshotter::writeTopic(
   }
   const bool start_time_specified = builtin_time_nonzero(req->start_time);
   const bool stop_time_specified = builtin_time_nonzero(req->stop_time);
-  // With no stop_time the window ends at request_time, so only messages
-  // older than start_time count as old.
   const rclcpp::Duration bag_duration(std::chrono::nanoseconds(overrideWindowNs(
-      stop_time_specified, rclcpp::Time(req->start_time).nanoseconds(),
-      rclcpp::Time(req->stop_time).nanoseconds(), request_time.nanoseconds())));
+      rclcpp::Time(req->start_time).nanoseconds(), request_time.nanoseconds())));
   bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -2043,33 +2032,43 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.include_post_trigger != -1) details.include_post_trigger = req_msg.include_post_trigger;
 
   if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;
-  if (req_msg.format != "")
+  if (req_msg.format != "" && !applyFormatOverride(req_msg, details.img_compression_opts_))
   {
-    details.img_compression_opts_.format = req_msg.format;
-    details.img_compression_opts_.h264 = false;
-    if (req_msg.format == "h264")
-    {
-      details.img_compression_opts_.h264 = true;
-      details.img_compression_opts_.format = "jpg";
-      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
-    }
-    else if (req_msg.format == "jpg" || req_msg.format == "jpeg") 
-    {
-      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
-      if (req_msg.jpg_quality != -1) details.img_compression_opts_.imwrite_flag_value = req_msg.jpg_quality;
-    } 
-    else if (req_msg.format == "png") 
-    {
-      details.img_compression_opts_.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
-      if (req_msg.png_compression != -1) details.img_compression_opts_.imwrite_flag_value = req_msg.png_compression;
-    }
-    else 
-    {
-      RCLCPP_WARN(get_logger(), "Invalid format to override compression: %s", req_msg.format.c_str());
-      details.img_compression_opts_.use_compression = false;
-    }
+    RCLCPP_WARN(get_logger(), "Invalid format to override compression: %s", req_msg.format.c_str());
   }
 
+}
+
+bool applyFormatOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts)
+{
+  opts.format = req_msg.format;
+  opts.h264 = false;
+  const bool was_jpg = opts.imwrite_flag == cv::IMWRITE_JPEG_QUALITY;
+  if (req_msg.format == "h264")
+  {
+    opts.h264 = true;
+    opts.format = "jpg";
+    opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+    if (!was_jpg) opts.imwrite_flag_value = 95;
+  }
+  else if (req_msg.format == "jpg" || req_msg.format == "jpeg")
+  {
+    opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+    if (!was_jpg) opts.imwrite_flag_value = 95;
+    if (req_msg.jpg_quality != -1) opts.imwrite_flag_value = req_msg.jpg_quality;
+  }
+  else if (req_msg.format == "png")
+  {
+    opts.imwrite_flag = cv::IMWRITE_PNG_COMPRESSION;
+    if (was_jpg) opts.imwrite_flag_value = 3;
+    if (req_msg.png_compression != -1) opts.imwrite_flag_value = req_msg.png_compression;
+  }
+  else
+  {
+    opts.use_compression = false;
+    return false;
+  }
+  return true;
 }
 
 void Snapshotter::clear()
@@ -2154,12 +2153,12 @@ void Snapshotter::pollTopics()
   for (const auto & name_type : topic_names_and_types) {
     if (name_type.second.size() < 1) {
       RCLCPP_ERROR(get_logger(), "Subscribed topic has no associated type.");
-      return;
+      continue;
     }
 
     if (name_type.second.size() > 1) {
       RCLCPP_ERROR(get_logger(), "Subscribed topic has more than one associated type.");
-      return;
+      continue;
     }
 
     if (isBuffered(name_type.first)) {
@@ -2263,7 +2262,7 @@ bool Snapshotter::resolveAndSubscribeProfileTopic(const ProfileTopicSpec & spec)
     rclcpp::Duration::from_seconds(*spec.duration_s) :
     SnapshotterTopicOptions::INHERIT_DURATION_LIMIT;
   const int64_t memory_limit = spec.memory_mb.has_value() ?
-    static_cast<int64_t>(*spec.memory_mb * MB_TO_B) :
+    megabytesToBytes(*spec.memory_mb) :
     SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT;
 
   return subscribeResolvedTopic(spec.name, type, qos, duration_limit, memory_limit);

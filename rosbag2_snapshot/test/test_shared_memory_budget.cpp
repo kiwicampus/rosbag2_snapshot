@@ -59,3 +59,11 @@ TEST(SharedMemoryBudget, SetLimitChangesCapacity)
   EXPECT_TRUE(budget.fits(10));
   EXPECT_FALSE(budget.fits(11));
 }
+
+TEST(SharedMemoryBudget, FractionalMegabytesAreKept)
+{
+  EXPECT_EQ(rosbag2_snapshot::megabytesToBytes(0.5), 500'000);
+  EXPECT_EQ(rosbag2_snapshot::megabytesToBytes(300.0), 300'000'000);
+  EXPECT_EQ(rosbag2_snapshot::megabytesToBytes(4096.0), 4'096'000'000);
+  EXPECT_LT(rosbag2_snapshot::megabytesToBytes(-0.5), 0);
+}

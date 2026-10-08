@@ -30,7 +30,9 @@ find_package(visualization_msgs REQUIRED)
 find_package(rosbag2_transport REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
-set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
+if(FFMPEG_PKGCONFIG)
+  set(ENV{PKG_CONFIG_PATH} "${FFMPEG_PKGCONFIG}:$ENV{PKG_CONFIG_PATH}")
+endif()
 find_package(PkgConfig REQUIRED)
 
 # H264 image compression needs foxglove_msgs (FFMPEGEncoder's output type) and
@@ -195,6 +197,12 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_message_queue_budget PRIVATE include)
   target_link_libraries(test_message_queue_budget ${library_name})
+
+  ament_add_gtest(test_compression_override
+    test/test_compression_override.cpp
+  )
+  target_include_directories(test_compression_override PRIVATE include)
+  target_link_libraries(test_compression_override ${library_name})
 
   if(ROSBAG2_SNAPSHOT_HAVE_H264)
     ament_add_gtest(test_ffmpeg_encoder

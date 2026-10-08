@@ -57,6 +57,12 @@ private:
   int64_t used_bytes_{0};
 };
 
+// The memory parameters are in MB of 1,000,000 bytes; fractions count.
+inline int64_t megabytesToBytes(double mb)
+{
+  return static_cast<int64_t>(mb * 1e6);
+}
+
 }  // namespace rosbag2_snapshot
 
 #endif  // ROSBAG2_SNAPSHOT__SHARED_MEMORY_BUDGET_HPP_

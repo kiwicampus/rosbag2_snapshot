@@ -142,8 +142,12 @@ struct TopicDetails
   }
 };
 
+// Applies a goal or profile entry's non-empty format to opts. False for an
+// unknown format, which also disables compression.
+bool applyFormatOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts);
+
 // Unknown strings log an error and fall back to DEFAULT QoS(5); never throws.
-const rclcpp::QoS qos_string_to_qos(std::string str)
+inline const rclcpp::QoS qos_string_to_qos(std::string str)
 {
     if (str == "DEFAULT") return rclcpp::QoS(5);
     if (str == "SENSOR_DATA") return rclcpp::QoS(5).best_effort();

@@ -1,3 +1,4 @@
+# Minimal configuration: buffer one topic with the node-wide default limits.
 /**:
   ros__parameters:
     topics: ["/rosout"]

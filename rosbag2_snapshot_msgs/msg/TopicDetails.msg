@@ -1,16 +1,17 @@
-string name     # The fully-qualified topic name
-string type     # The fully-qualified message type
+# Per-topic overrides for one capture. -1 / "" = keep the topic's configured value.
+string name     # Buffered topic name; entries are matched by name
+string type     # Ignored on a goal
 
-float32 throttle_period -1.0          # Minimum seconds between saved messages
-int8 h264_throttle_skip -1          # (int-bool) If true, the throttle_period is ignored and all messages are saved
+float32 throttle_period -1.0          # Minimum seconds between written messages
+int8 h264_throttle_skip -1            # (int-bool) Ignore throttle_period while the topic is written as H264
 
-int8 override_old_timestamps -1      # (int-bool) This will override timestamps of old messages, placing as if they were at the beginning of the rosbag
-int32 queue_depth -1                 # The number of messages to save in the rosbag
-int32 old_messages_to_keep -1        # The number of messages to keep before the time window
+int8 override_old_timestamps -1       # (int-bool) Write messages older than the window at start_time
+int32 queue_depth -1                  # Write at most the newest N messages. 0 = no cap
+int32 old_messages_to_keep -1         # Also write up to N messages from before start_time. 0 = none
 
-int8 use_compression -1     # (int-bool) If true, the topic will be compressed
-string format ""            # The format to use for compression. Choices: jpg (or jpeg), png, h264
-int32 jpg_quality -1        # The quality of the jpg compression. 0-100
-int32 png_compression -1    # The quality of the png compression. 0-9
+int8 use_compression -1     # (int-bool) Compress this image topic
+string format ""            # jpg, jpeg, png or h264; any other value disables compression
+int32 jpg_quality -1        # 0-100, read only with format jpg/jpeg
+int32 png_compression -1    # 0-9, read only with format png
 
-int8 include_post_trigger -1  # (int-bool) In a forward capture, include arrivals after the trigger. -1 = inherit (default true)
+int8 include_post_trigger -1  # (int-bool) In a forward capture, include arrivals after the trigger

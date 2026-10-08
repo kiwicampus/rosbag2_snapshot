@@ -1,3 +1,5 @@
+# Several topics, two with their own age limit (seconds) and one with its own
+# memory limit (bytes); the rest use the node-wide defaults.
 /**:
   ros__parameters:
     topics: ["/points", "/odom", "/camera/image_raw"]

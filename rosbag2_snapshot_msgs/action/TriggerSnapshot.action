@@ -28,9 +28,10 @@ bool use_flat_output                 # false (default): filename becomes a bag d
                                      # self-describing .mcap is kept, moved to exactly filename
 ---
 # result definition
-bool success                         # True if snapshot successfully written to disk
+bool success                         # True only for a complete capture
+# Reserved; not currently set by the node.
 string NO_DATA_MESSAGE=no messages buffered on selected topics
-string message                       # Error description if failed
+string message                       # Saved path on success, else the reason
 ---
 #feedback definition
 float32 progress                     # Progress of the snapshot in percentage

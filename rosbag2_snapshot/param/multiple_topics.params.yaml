@@ -12,4 +12,4 @@
       /camera/image_raw:
         type: "sensor_msgs/msg/Image"
         duration: 15.0
-        memory: 200000000.0  # bytes (200 MB); default_memory_limit is in MB
+        memory: 200000000.0  # bytes (200 MB), written as a double; default_memory_limit is in MB

@@ -11,9 +11,10 @@ bag when a `TriggerSnapshot` goal arrives. The interfaces are listed in the
 | `rclcpp`, `rclcpp_action`, `rclcpp_components`, `rmw`, `rosidl_typesupport_introspection_cpp` | Node, action server, component, header-stamp introspection |
 | `std_srvs`, `sensor_msgs`, `visualization_msgs` | Interface types |
 | `rosbag2_cpp`, `rosbag2_compression`, `rosbag2_compression_zstd`, `rosbag2_transport` | Bag writing, storage presets, QoS adaptation |
-| rosbag2 MCAP storage plugin (`rosbag2_storage_mcap`) | Bags are always written with storage id `mcap` |
+| rosbag2 MCAP storage plugin (`rosbag2_storage_mcap`) | Bags are always written with storage id `mcap`. Not listed in `package.xml` |
 | `cv_bridge`, OpenCV | JPG/PNG image compression |
 | `yaml-cpp` | Capture profile files |
+| `pkg-config` | Required by CMake, with or without H264 |
 | `foxglove_msgs` | H264 output type. Listed in `package.xml`, so rosdep installs it |
 | FFmpeg development libraries (`libavcodec-dev`, `libavutil-dev`, `libswscale-dev`, `libswresample-dev`) | H264 only. Not in `package.xml`: rosdep does not install them. The default encoder needs an FFmpeg built with `libx264` |
 
@@ -62,7 +63,8 @@ ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnap
 
 This writes `/tmp/snapshot.bag/snapshot.bag_0.mcap` and
 `/tmp/snapshot.bag/metadata.yaml`. `param/single_topic.params.yaml` and
-`param/multiple_topics.params.yaml` are further examples.
+`param/multiple_topics.params.yaml` in the package source are further
+examples. They are not installed.
 
 ### As a component
 
@@ -92,7 +94,7 @@ for a `double`) fails node startup.
 | `rosbag_preset_profile` | string | `"zstd_small"` | MCAP storage preset used when a goal leaves its own empty: `none`, `fastwrite`, `zstd_fast` or `zstd_small`. Any other value makes every goal using it abort |
 | `interval_single_msg_types` | string[] | `[]` | Extra message types narrowed to one message by `interval_mode_single_msg` |
 | `capture_profiles_dir` | string | `""` | Directory of capture profiles. Empty = no profiles |
-| `topics` | string[] | `[]` | Topics to buffer, each configured under `topic_details`. **Empty = buffer every topic in the graph** |
+| `topics` | string[] | `[]` | Topics to buffer, each configured under `topic_details`. Empty = buffer every topic in the graph |
 | `topic_details.<topic>.*` | | | Per-topic settings, below |
 | `h264.*` | | | H264 encoder settings, below |
 
@@ -114,7 +116,7 @@ Only topics listed in `topics` read these keys.
 | `old_messages_to_keep` | int | `-1` | Also write up to N messages from before `start_time` |
 | `override_old_timestamps` | bool | `false` | See [Timestamps](#timestamps) |
 | `h264_throttle_skip` | bool | `false` | Ignore `throttle_period` while the topic is written as H264 |
-| `compression.enabled` | bool | `false` | Compress this topic when written. `sensor_msgs/msg/Image` topics only |
+| `compression.enabled` | bool | `false` | Compress this topic when written. Read for `sensor_msgs/msg/Image` topics only |
 | `compression.format` | string | `jpg` | `jpg`, `jpeg` or `png`. Any other value, `h264` included, disables compression with an error |
 | `compression.jpg_quality` | int | `95` | 0 to 100 |
 | `compression.png_compression` | int | `3` | 0 to 9 |
@@ -125,10 +127,11 @@ interval mode.
 
 ### H264 encoder (`h264.*`)
 
-One set for the whole node, H264 builds only. The parameters are declared
-when the first topic that gets an encoder subscribes: any profile topic, or a
-`topic_details` image topic that sets `compression.enabled` (and
-`compression.format` when enabled). Until then they are not read.
+One set for the whole node, H264 builds only. The node declares these
+parameters when it creates its first encoder, so they do not exist before
+that. Every profile topic gets an encoder, and so does a `topic_details`
+image topic that sets `compression.enabled` (and `compression.format` when
+it is `true`).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -146,25 +149,28 @@ A width that is not a multiple of 32 logs a warning. An encoder that fails to
 open fails the capture.
 
 A topic written as H264 is stored as `foxglove_msgs/msg/CompressedVideo`.
-H264 applies only to compressed image topics (`compression.enabled`, or a
-profile or goal compression other than `none`). It is selected per goal with
-`use_h264`, per profile topic with `compression: h264`, or per goal topic with
-`format: h264`.
+H264 applies only to an image topic that is being compressed: through
+`compression.enabled: true`, a profile `compression` other than `none`, or a
+goal entry with `use_compression: 1`. It is selected per goal with
+`use_h264`, per profile topic with `compression: h264`, or per goal topic
+with `format: h264`.
 
-Each capture opens a fresh encoder. A frame for which the encoder returns no
-packet is skipped, never written empty, so settings that make the encoder
-buffer frames (a slower preset, a tune other than `zerolatency`) drop the
-first frames of every capture. The defaults emit one packet per frame.
+Each capture opens a fresh encoder and writes only the frames that produce a
+packet. Settings that make the encoder buffer frames (a slower preset, a tune
+other than `zerolatency`) therefore drop the first frames of every capture.
+The defaults emit one packet per frame.
 
-Fallbacks: without an H264 build, or for a topic that has no encoder (a topic
-found by all-topics discovery, or a `topic_details` image topic without
-`compression.enabled`), `use_h264` writes the topic's JPG/PNG setting, and
-`compression: h264` or `format: h264` writes JPG at the topic's `jpg_quality`
-(`95` for a PNG topic or when not configured).
+A topic without an encoder falls back to JPG/PNG. That covers every topic
+in a build without H264, topics found by all-topics discovery, and
+`topic_details` image topics that do not set `compression.enabled`, or set
+it `true` without `compression.format`. For such a topic, `use_h264` writes
+the topic's own JPG/PNG setting (JPG at `95` when it has none), and
+`compression: h264` or `format: h264` writes JPG at the topic's
+`jpg_quality` (`95` for a PNG topic or when none is configured).
 
-FFmpeg messages (per-encoder setup and stats) print only when the node logger
-is at DEBUG when an encoder is set up at topic subscription; warnings and
-errors always show. Changing the log level at runtime has no effect on them.
+FFmpeg's own log output (encoder setup and statistics) appears only if the
+node logger is at DEBUG when an encoder is created. Its warnings and errors
+always appear. Changing the log level later has no effect on it.
 
 ## Capture profiles
 
@@ -196,8 +202,8 @@ topics:
 
 ### Profile topic keys
 
-Profile files are plain YAML, not ROS parameters, so `30` and `30.0` are both
-accepted for a number.
+Profile files are plain YAML, not ROS parameters, so a `double` key accepts
+`30` as well as `30.0`.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -222,16 +228,21 @@ The other keys apply when the profile is selected.
 
 - Every profile topic is buffered from startup, whether or not a profile is
   selected. A topic whose type or QoS cannot be resolved yet (no publisher)
-  is retried every second.
+  is retried every second. A topic that sets both `type` and `qos` needs no
+  publisher to be subscribed.
 - A topic already listed in `topics` keeps its `topic_details` buffering.
   When several profiles name the same topic, the profile whose name sorts
   first sets its buffering (`type`, `qos`, `duration_s`, `memory_mb`).
 - `include` accepts a name or a list. Only `topics` are inherited. Includes
   merge in list order, later entries replacing earlier ones by topic name,
   and the profile's own `topics` replace inherited ones.
-- A profile is dropped, with a startup warning, when its file fails to parse
-  or fails validation, it includes an unknown or dropped profile, it is part
-  of an include cycle, or it ends up with no topics. The rest still load.
+- A profile is dropped, with a startup warning, when its file is not valid
+  YAML, a value cannot be read as its key's type (for example
+  `queue_depth: 1.5`), it fails the checks in the table above, it includes
+  an unknown or dropped profile, it is part of an include cycle, or it ends
+  up with no topics. The rest still load.
+- A `capture_profiles_dir` that is not a directory logs a warning and loads
+  no profiles.
 
 ## Triggering a capture
 
@@ -286,6 +297,9 @@ value when the topic already uses that format, and otherwise uses the default
 (`95` for JPG, `3` for PNG). A selected profile applies its topic
 keys as these same overrides.
 
+`use_compression: 1` with no `format`, on a topic that has no compression
+format of its own, writes JPG at quality `95`.
+
 ### Result and feedback
 
 | Field | Meaning |
@@ -296,28 +310,41 @@ keys as these same overrides.
 | feedback `duration` | Seconds since the capture started |
 | feedback `message` | Current step |
 
+Feedback is published every 0.5 s while a forward capture waits, and after
+each topic is written.
+
 `success` is the authoritative outcome. The action status is `SUCCEEDED`
 for complete and failed captures and for a goal canceled during a forward
 capture's wait, `CANCELED` for a goal canceled while writing, and `ABORTED`
-when the output cannot be opened (an unknown storage preset included) or the
-capture cannot start.
+when the output cannot be opened (an unknown storage preset, or a leftover
+`<filename>.tmp` that cannot be removed, included) or the capture cannot
+start.
 
 ### Output files
 
 | Outcome | `use_flat_output: false` | `use_flat_output: true` |
 |---|---|---|
-| Complete | Directory `<filename>/` with `<name>_0.mcap` and `metadata.yaml` | File `<filename>` |
-| Canceled or a topic failed to write | Directory `<filename>.partial/` with `<name>.partial_0.mcap` | File `<filename>.partial` |
-| Writer failed to close | Left at the staging directory `<filename>.tmp` | Same |
+| Complete | Directory `<filename>/` with `<name>_0.mcap` and `metadata.yaml` | File `<filename>`, replacing an existing file |
+| Canceled, a topic failed to write, or the capture crashed | Directory `<filename>.partial/` with `<name>.partial_0.mcap` | File `<filename>.partial` |
+| Writer failed to close, or the move failed | Left in the staging directory `<filename>.tmp/` | Same |
 
 `<name>` is the last component of `filename`. For `filename: /tmp/snapshot.bag`
 a complete capture is `/tmp/snapshot.bag/snapshot.bag_0.mcap` and a partial
 one `/tmp/snapshot.bag.partial/snapshot.bag.partial_0.mcap`.
 
 Data is staged in `<filename>.tmp` and moved into place when the writer
-closes. A leftover `<filename>.tmp` is overwritten by the next capture to the
-same `filename`. `snapshot_capture_event.filename` gives the path actually
-written.
+closes. `snapshot_capture_event.filename` gives the path actually written.
+
+A capture first removes anything left at `<filename>.tmp`, file or
+directory, and logs a warning naming it. That includes the data of an
+earlier capture whose move failed. If the removal fails, the goal is aborted
+with the error in `message`.
+
+The move into `<filename>/` (or `<filename>.partial/`) fails when that
+directory already exists and is not empty. The capture reports
+`success: false` and the data stays in `<filename>.tmp` until the next
+capture to that `filename`. Give every capture its own `filename`, or remove
+`<filename>` before reusing one.
 
 ### Examples
 
@@ -358,6 +385,9 @@ against it.
 
 - Each buffered message counts its serialized size plus a fixed estimate of
   bookkeeping overhead toward the memory limits.
+- With the defaults (`default_memory_limit` 300 MB, `total_memory_limit` 0,
+  no age limit), every topic can grow to 300 MB. Set an age limit or
+  `total_memory_limit` to bound the total.
 - A message larger than its topic's memory limit is dropped with a warning.
   When `total_memory_limit` is reached, the oldest messages of the largest
   buffer are evicted to make room.
@@ -366,6 +396,11 @@ against it.
   `stop_time` and the interval window are ignored for it. With the default
   `default_duration_limit` of `-1`, this applies to every topic that does not
   set its own limit.
+- The age limit is applied when a message arrives, measured back from that
+  message. A topic that stops publishing keeps its last messages however old
+  they get. A goal with neither `topics` nor `profile` also drops, from each
+  topic, messages older than the age limit at the moment of the trigger. A
+  goal that names topics does not.
 - `old_messages_to_keep` takes effect only for a topic with an age limit, in
   a goal with a non-zero `start_time`, outside interval mode.
 - A buffer is cleared only if its topic has an age limit. Such a buffer is
@@ -392,12 +427,14 @@ buffering is paused or resumed, or a profile topic starts buffering. A topic
 added by all-topics discovery does not trigger it. It uses volatile QoS with
 depth 1, so a late subscriber sees nothing until the next change.
 
-`snapshot_capture_event` (depth 10) carries one message per finished
-capture:
+`snapshot_capture_event` (reliable, volatile, depth 10) carries one message
+per capture that ran. A goal aborted before writing (the output cannot be
+opened, or the capture cannot start) publishes none; only `snapshot_state`
+reports it.
 
 | Field | Meaning |
 |---|---|
-| `filename` | Path the bag was saved to (`.partial` suffix when it ended early) |
+| `filename` | Path actually written: `<filename>`, `<filename>.partial` or `<filename>.tmp` (see [Output files](#output-files)) |
 | `profile` | The goal's profile, empty when none |
 | `success`, `message` | Outcome; `message` is the path on success, the reason otherwise |
 | `topics_written` | Topics the capture went through, skipped ones included |
@@ -413,13 +450,34 @@ capture is in progress. On resume, a buffer whose topic has an age limit is
 cleared when its oldest-to-newest span exceeds `default_duration_limit` (for
 topics listed in `topics`) or `0` (profile and discovered topics).
 
+## Verifying a capture
+
+Watch the capture events in one terminal:
+
+```bash
+ros2 topic echo /snapshot_capture_event
+```
+
+Trigger a capture in another, then inspect the bag:
+
+```bash
+ros2 action send_goal /trigger_snapshot rosbag2_snapshot_msgs/action/TriggerSnapshot "{filename: '/tmp/check.bag'}" --feedback
+ros2 bag info /tmp/check.bag
+```
+
+The result should have `success: true`, and the event's `content_topics` and
+`content_message_counts` should match what `ros2 bag info` lists. A topic
+with a count of `0` was declared but had nothing in range. `/snapshot_state`
+lists the buffered topics, from the next state change on (see
+[Status topics](#status-topics)).
+
 ## Operational notes
 
 - When `topics` is empty, the graph is polled every second and each new
   topic is buffered with the default limits, `DEFAULT` QoS and no
   compression settings. Discovery includes the node's own publishers. A
-  topic advertised with no type or more than one type stops that polling
-  pass, so topics after it are not picked up.
+  topic advertised with no type or with more than one type is skipped, with
+  an error logged on every poll.
 - Each subscription requests topic statistics on `<topic>/statistics`.
   rclcpp versions whose generic subscriptions do not support topic
   statistics, ROS 2 Iron included, publish nothing there.
@@ -434,4 +492,5 @@ colcon test --packages-select rosbag2_snapshot --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-The tests are plain gtests and need no running graph.
+The tests are plain gtests and need no running graph. `test_ffmpeg_encoder`
+is built only when H264 is.

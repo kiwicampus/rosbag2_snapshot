@@ -1579,16 +1579,6 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
   std::filesystem::path final_path(req->filename);
   std::filesystem::path staging_path = stagingPathFor(final_path);
 
-  if (std::filesystem::exists(staging_path)) {
-    // Left behind by a crash or kill; reclaimed when the same filename is
-    // requested again.
-    RCLCPP_WARN(
-      get_logger(),
-      "Staging file %s already exists (likely left behind by a previous "
-      "crash or incomplete capture); it will be overwritten.",
-      staging_path.string().c_str());
-  }
-
   std::shared_ptr<rosbag2_cpp::Writer> bag_writer_ptr;
   bag_writer_ptr = std::make_shared<rosbag2_cpp::Writer>();
 
@@ -1597,6 +1587,20 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     req->filename.c_str(), staging_path.string().c_str());
 
   try {
+    // Left behind by a crash, a kill or a failed move. rosbag2 will not open
+    // a bag over an existing path, so it is removed first.
+    std::error_code stale_ec;
+    const auto removed = std::filesystem::remove_all(staging_path, stale_ec);
+    if (stale_ec) {
+      throw std::runtime_error(
+        "cannot remove stale staging path " + staging_path.string() + ": " + stale_ec.message());
+    }
+    if (removed > 0) {
+      RCLCPP_WARN(
+        get_logger(), "Removed stale staging path %s left by an earlier capture.",
+        staging_path.string().c_str());
+    }
+
     rosbag2_storage::StorageOptions storage_opts;
     storage_opts.storage_id = "mcap";
     storage_opts.uri = staging_path.string();
@@ -1677,7 +1681,7 @@ void Snapshotter::handle_accepted(const std::shared_ptr<rclcpp_action::ServerGoa
     try {
       bag_writer_ptr->close();
     } catch (const std::exception &) {
-      // Best-effort; a leftover staging file is overwritten when the same
+      // Best-effort; a leftover staging file is removed when the same
       // filename is requested again.
     }
     res->success = false;
@@ -1809,7 +1813,8 @@ void Snapshotter::createBag(PendingCapture capture)
           force_topic_throttle, &capture.content))
       {
         success = false;
-        message = "Failed to write topic " + topic.type + " to bag file.";
+        message = "Failed to write topic " + topic.name +
+          (details.type.empty() ? "" : " (" + details.type + ")") + " to bag file.";
         break;
       }
       feedback->duration = (this->now() - request_time).seconds();
@@ -1914,9 +1919,9 @@ void Snapshotter::finalizeCapture(
     std::filesystem::rename(capture.staging_path, saved_path, ec);
     if (ec) {
       success = false;
-      saved_path = capture.staging_path;
       message = "Failed to move staged bag " + capture.staging_path.string() +
         " to " + saved_path.string() + ": " + ec.message();
+      saved_path = capture.staging_path;
       RCLCPP_ERROR(get_logger(), "%s", message.c_str());
     } else {
       renameBagFileToMatchDirectory(saved_path);
@@ -2031,12 +2036,27 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
   if (req_msg.old_messages_to_keep != -1) details.old_messages_to_keep = req_msg.old_messages_to_keep;
   if (req_msg.include_post_trigger != -1) details.include_post_trigger = req_msg.include_post_trigger;
 
-  if (req_msg.use_compression != -1) details.img_compression_opts_.use_compression = req_msg.use_compression;
-  if (req_msg.format != "" && !applyFormatOverride(req_msg, details.img_compression_opts_))
+  if (!applyCompressionOverride(req_msg, details.img_compression_opts_))
   {
     RCLCPP_WARN(get_logger(), "Invalid format to override compression: %s", req_msg.format.c_str());
   }
 
+}
+
+bool applyCompressionOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts)
+{
+  if (req_msg.use_compression != -1) opts.use_compression = req_msg.use_compression;
+  if (req_msg.format != "" && !applyFormatOverride(req_msg, opts)) return false;
+  if (opts.use_compression && opts.format.empty())
+  {
+    opts.format = "jpg";
+    if (opts.imwrite_flag != cv::IMWRITE_JPEG_QUALITY)
+    {
+      opts.imwrite_flag = cv::IMWRITE_JPEG_QUALITY;
+      opts.imwrite_flag_value = 95;
+    }
+  }
+  return true;
 }
 
 bool applyFormatOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts)

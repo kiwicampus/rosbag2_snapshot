@@ -1,39 +1,37 @@
 # goal definition
-string filename                      # Output path, used as given. Must end in .bag or .mcap;
-                                     # any other name is rejected at goal acceptance
+string filename                      # Output path. Must end in .bag or .mcap, else the goal is rejected
 TopicDetails[] topics                # Topics to include. Empty = every buffered topic
-builtin_interfaces/Time start_time   # Earliest message to include. time(0) = each topic's oldest buffered message
-builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message
+builtin_interfaces/Time start_time   # Earliest message to include. time(0) = each topic's oldest buffered message.
+                                     # Topics with no age limit ignore it
+builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message.
+                                     # Topics with no age limit ignore it
 bool use_h264                        # Encode compression-enabled Image topics as h264 instead of jpg/png
 bool throttle_msgs                   # Apply each topic's configured throttle period; false = every message in range
 bool use_interval_mode               # Write [msg_timestamp - tolerance, msg_timestamp + tolerance]
                                      # instead of start_time/stop_time
 builtin_interfaces/Time  msg_timestamp  # Center of the interval-mode window; interval_mode_single_msg
                                         # matches this stamp
-float32 interval_mode_tolerance       # interval_mode window: [msg_timestamp - tolerance, msg_timestamp + tolerance]
+float32 interval_mode_tolerance       # Interval half-width, seconds
 bool interval_mode_single_msg        # Write one message for CameraInfo/ImageMarker/compressed Image/
-                                     # interval_single_msg_types topics: exact stamp == msg_timestamp preferred,
-                                     # else closest with a warning. false = every message in the interval
+                                     # interval_single_msg_types topics: the one whose header stamp equals
+                                     # msg_timestamp, else the closest. false = every message in the interval
 string rosbag_preset_profile         # rosbag2 storage preset. Empty = the node's rosbag_preset_profile
-string profile                       # Named capture profile (capture_profiles_dir) selecting topics and
-                                     # their per-topic overrides. Empty = topics (or all buffered) honoring
-                                     # throttle_msgs. A profile's max_rate_hz always applies
-float32 post_duration_s              # >0 defers writing until this many seconds after goal acceptance (or
-                                     # until canceled), producing a forward/live capture that also includes
-                                     # messages arriving after the trigger; buffering is otherwise unchanged.
-                                     # 0 (default) writes immediately from what's already buffered. Rejected
-                                     # at goal-acceptance time if it exceeds the node's max_post_duration_s
-bool use_flat_output                 # false (default): filename becomes a bag directory (rosbag2's usual
-                                     # <filename>/<basename>_0.mcap + metadata.yaml). true: only the single
-                                     # self-describing .mcap is kept, moved to exactly filename
+string profile                       # Capture profile (capture_profiles_dir) selecting topics and their
+                                     # overrides; topics is then ignored. Empty = use topics. An unknown name
+                                     # is rejected. A profile's max_rate_hz applies even without throttle_msgs
+float32 post_duration_s              # > 0: keep adding new messages for this many seconds (or until canceled),
+                                     # then write: a forward capture. 0 = write what is buffered now.
+                                     # Rejected above the node's max_post_duration_s, or when that is <= 0
+bool use_flat_output                 # false: filename is a bag directory (<basename>_0.mcap + metadata.yaml).
+                                     # true: a single .mcap file at filename
 ---
 # result definition
 bool success                         # True only for a complete capture
-# Reserved; not currently set by the node.
+# Not used by the node.
 string NO_DATA_MESSAGE=no messages buffered on selected topics
 string message                       # Saved path on success, else the reason
 ---
 #feedback definition
-float32 progress                     # Progress of the snapshot in percentage
+float32 progress                     # Percent complete
 float32 duration                     # Seconds since the capture started
-string message                       # Current status of the snapshot
+string message                       # Current step

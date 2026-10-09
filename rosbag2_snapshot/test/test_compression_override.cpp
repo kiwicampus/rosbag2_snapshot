@@ -4,6 +4,7 @@
 
 using rosbag2_snapshot::DetailsMsg;
 using rosbag2_snapshot::ImageCompressionOptions;
+using rosbag2_snapshot::applyCompressionOverride;
 using rosbag2_snapshot::applyFormatOverride;
 
 namespace
@@ -90,5 +91,38 @@ TEST(CompressionOverride, UnknownFormatDisablesCompression)
 {
   auto opts = jpgTopic(60);
   EXPECT_FALSE(applyFormatOverride(formatOverride("webp"), opts));
+  EXPECT_FALSE(opts.use_compression);
+}
+
+TEST(CompressionOverride, EnablingWithoutAFormatMeansJpg)
+{
+  ImageCompressionOptions opts;
+  DetailsMsg msg{};
+  msg.use_compression = 1;
+  ASSERT_TRUE(applyCompressionOverride(msg, opts));
+  EXPECT_TRUE(opts.use_compression);
+  EXPECT_EQ(opts.format, "jpg");
+  EXPECT_EQ(opts.imwrite_flag, cv::IMWRITE_JPEG_QUALITY);
+  EXPECT_EQ(opts.imwrite_flag_value, 95);
+}
+
+TEST(CompressionOverride, EnablingWithoutAFormatKeepsTheTopicsFormat)
+{
+  auto opts = pngTopic();
+  opts.use_compression = false;
+  DetailsMsg msg{};
+  msg.use_compression = 1;
+  ASSERT_TRUE(applyCompressionOverride(msg, opts));
+  EXPECT_EQ(opts.format, "png");
+  EXPECT_EQ(opts.imwrite_flag_value, 3);
+}
+
+TEST(CompressionOverride, UnknownFormatInAnEntryDisablesCompression)
+{
+  ImageCompressionOptions opts;
+  DetailsMsg msg{};
+  msg.use_compression = 1;
+  msg.format = "webp";
+  EXPECT_FALSE(applyCompressionOverride(msg, opts));
   EXPECT_FALSE(opts.use_compression);
 }

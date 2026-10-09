@@ -307,3 +307,31 @@ TEST(CaptureProfiles, InvalidWriteKnobsAreRejected)
 
   std::filesystem::remove_all(dir);
 }
+
+TEST(CaptureProfiles, WronglyTypedValueDropsOnlyThatProfile)
+{
+  auto dir = makeEmptyDir("wrong_type");
+  writeFile(dir / "good.yaml", "topics:\n  - name: /ok\n    queue_depth: 2\n");
+  writeFile(dir / "bad_int.yaml", "topics:\n  - name: /x\n    queue_depth: 1.5\n");
+  writeFile(dir / "bad_bool.yaml", "topics:\n  - name: /x\n    include_post_trigger: 1\n");
+  writeFile(dir / "bad_double.yaml", "topics:\n  - name: /x\n    max_rate_hz: [1, 2]\n");
+  writeFile(dir / "bad_entry.yaml", "topics:\n  - /x\n");
+
+  auto result = rosbag2_snapshot::loadProfilesDir(dir.string());
+
+  EXPECT_TRUE(result.ok);
+  ASSERT_EQ(result.profiles.profiles.size(), 1u);
+  EXPECT_NE(result.profiles.find("good"), nullptr);
+  ASSERT_EQ(result.warnings.size(), 4u);
+
+  auto bad_int = std::find_if(
+    result.warnings.begin(), result.warnings.end(),
+    [](const std::string & w) {return w.rfind("bad_int.yaml:", 0) == 0;});
+  ASSERT_NE(bad_int, result.warnings.end());
+  EXPECT_NE(bad_int->find("profile 'bad_int'"), std::string::npos) << *bad_int;
+  EXPECT_NE(bad_int->find("queue_depth"), std::string::npos) << *bad_int;
+  EXPECT_NE(bad_int->find("/x"), std::string::npos) << *bad_int;
+  EXPECT_NE(bad_int->find("'1.5'"), std::string::npos) << *bad_int;
+
+  std::filesystem::remove_all(dir);
+}

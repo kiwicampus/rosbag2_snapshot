@@ -1,5 +1,6 @@
-# One message per finished capture.
-string filename                  # Path actually written (.partial suffix when it ended early)
+# One message per finished capture. A goal aborted before writing publishes none.
+string filename                  # Path actually written: filename, filename.partial, or filename.tmp
+                                 # when the bag could not be moved into place
 string profile                   # The goal's profile; empty when none
 bool success                     # True only for a complete capture
 string message                   # Saved path on success, else the reason

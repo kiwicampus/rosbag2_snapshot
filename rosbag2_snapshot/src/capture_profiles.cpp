@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace rosbag2_snapshot
 {
@@ -28,19 +30,27 @@ void mergeTopic(std::vector<ProfileTopicSpec> & merged, const ProfileTopicSpec &
   }
 }
 
-bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, std::string & error)
+// node[key] as T. A value of another type throws, naming the key and value.
+template<typename T>
+T readValue(const YAML::Node & node, const std::string & key, const std::string & topic)
 {
-  YAML::Node root;
   try {
-    root = YAML::LoadFile(path.string());
-  } catch (const std::exception & ex) {
-    error = ex.what();
-    return false;
+    return node[key].as<T>();
+  } catch (const YAML::Exception &) {
+    const char * expected = std::is_same_v<T, bool> ? "a bool" :
+      std::is_same_v<T, int> ? "an int" : std::is_same_v<T, double> ? "a double" : "a string";
+    YAML::Emitter value;
+    value.SetSeqFormat(YAML::Flow);
+    value.SetMapFormat(YAML::Flow);
+    value << node[key];
+    throw std::runtime_error(
+      key + (topic.empty() ? "" : " for topic " + topic) + " must be " + expected +
+      ", got '" + value.c_str() + "'");
   }
+}
 
-  CaptureProfile profile{};
-  profile.name = path.stem().string();
-
+bool parseProfile(const YAML::Node & root, CaptureProfile & profile, std::string & error)
+{
   if (root["include"]) {
     if (root["include"].IsScalar()) {
       profile.includes.push_back(root["include"].as<std::string>());
@@ -60,39 +70,41 @@ bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, 
       return false;
     }
     for (const auto & node : root["topics"]) {
-      if (!node["name"] || node["name"].as<std::string>().empty()) {
+      if (!node["name"] || readValue<std::string>(node, "name", "").empty()) {
         error = "a topic entry is missing 'name'";
         return false;
       }
 
       ProfileTopicSpec spec{};
-      spec.name = node["name"].as<std::string>();
-      spec.type = node["type"] ? node["type"].as<std::string>() : "";
-      spec.qos = node["qos"] ? node["qos"].as<std::string>() : "";
-      spec.max_rate_hz = node["max_rate_hz"] ? node["max_rate_hz"].as<double>() : 0.0;
-      spec.include_post_trigger =
-        node["include_post_trigger"] ? node["include_post_trigger"].as<bool>() : true;
+      spec.name = readValue<std::string>(node, "name", "");
+      spec.type = node["type"] ? readValue<std::string>(node, "type", spec.name) : "";
+      spec.qos = node["qos"] ? readValue<std::string>(node, "qos", spec.name) : "";
+      spec.max_rate_hz =
+        node["max_rate_hz"] ? readValue<double>(node, "max_rate_hz", spec.name) : 0.0;
+      spec.include_post_trigger = node["include_post_trigger"] ?
+        readValue<bool>(node, "include_post_trigger", spec.name) : true;
       if (node["duration_s"]) {
-        spec.duration_s = node["duration_s"].as<double>();
+        spec.duration_s = readValue<double>(node, "duration_s", spec.name);
       }
       if (node["memory_mb"]) {
-        spec.memory_mb = node["memory_mb"].as<double>();
+        spec.memory_mb = readValue<double>(node, "memory_mb", spec.name);
       }
-      spec.compression = node["compression"] ? node["compression"].as<std::string>() : "";
+      spec.compression =
+        node["compression"] ? readValue<std::string>(node, "compression", spec.name) : "";
       if (node["compression_quality"]) {
-        spec.compression_quality = node["compression_quality"].as<int>();
+        spec.compression_quality = readValue<int>(node, "compression_quality", spec.name);
       }
       if (node["override_old_timestamps"]) {
-        spec.override_old_timestamps = node["override_old_timestamps"].as<bool>();
+        spec.override_old_timestamps = readValue<bool>(node, "override_old_timestamps", spec.name);
       }
       if (node["queue_depth"]) {
-        spec.queue_depth = node["queue_depth"].as<int>();
+        spec.queue_depth = readValue<int>(node, "queue_depth", spec.name);
       }
       if (node["old_messages_to_keep"]) {
-        spec.old_messages_to_keep = node["old_messages_to_keep"].as<int>();
+        spec.old_messages_to_keep = readValue<int>(node, "old_messages_to_keep", spec.name);
       }
       if (node["h264_throttle_skip"]) {
-        spec.h264_throttle_skip = node["h264_throttle_skip"].as<bool>();
+        spec.h264_throttle_skip = readValue<bool>(node, "h264_throttle_skip", spec.name);
       }
 
       if (spec.max_rate_hz < 0.0) {
@@ -136,6 +148,30 @@ bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, 
 
   if (profile.topics.empty() && profile.includes.empty()) {
     error = "must have a non-empty 'topics' list and/or an 'include'";
+    return false;
+  }
+  return true;
+}
+
+bool parseProfileFile(const std::filesystem::path & path, CaptureProfile & out, std::string & error)
+{
+  YAML::Node root;
+  try {
+    root = YAML::LoadFile(path.string());
+  } catch (const std::exception & ex) {
+    error = ex.what();
+    return false;
+  }
+
+  CaptureProfile profile{};
+  profile.name = path.stem().string();
+  // A wrongly typed value or a malformed entry throws; it drops the profile.
+  try {
+    if (!parseProfile(root, profile, error)) {
+      return false;
+    }
+  } catch (const std::exception & ex) {
+    error = ex.what();
     return false;
   }
 
@@ -243,7 +279,9 @@ ProfileParseResult loadProfilesDir(const std::string & dir)
     CaptureProfile profile{};
     std::string error{};
     if (!parseProfileFile(entry.path(), profile, error)) {
-      result.warnings.push_back(entry.path().filename().string() + ": " + error);
+      result.warnings.push_back(
+        entry.path().filename().string() + ": profile '" + entry.path().stem().string() +
+        "' dropped: " + error);
       continue;
     }
 

@@ -146,6 +146,10 @@ struct TopicDetails
 // unknown format, which also disables compression.
 bool applyFormatOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts);
 
+// Applies an entry's use_compression and format to opts. Compression left on
+// with no format means jpg. False for an unknown format.
+bool applyCompressionOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts);
+
 // Unknown strings log an error and fall back to DEFAULT QoS(5); never throws.
 inline const rclcpp::QoS qos_string_to_qos(std::string str)
 {

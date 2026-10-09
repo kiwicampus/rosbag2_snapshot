@@ -3,7 +3,7 @@
 <package format="3">
   <name>rosbag2_snapshot</name>
   <version>0.1.0</version>
-  <description>The rosbag_snapshot package</description>
+  <description>Buffers ROS 2 topics in memory and writes them to an MCAP bag on request. A rosbag2 port of rosbag_snapshot.</description>
   <maintainer email="whitleysoftwareservices@gmail.com">Josh Whitley</maintainer>
   <license>BSD</license>
   <author email="kma1660+rsp@gmail.com">Kevin Allen</author>

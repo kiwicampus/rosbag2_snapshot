@@ -29,6 +29,7 @@ find_package(foxglove_msgs REQUIRED)
 find_package(usr_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(detection_msgs REQUIRED)
+find_package(shm_ros REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} ${FFMPEG_PKGCONFIG})
 find_package(PkgConfig REQUIRED)
@@ -61,6 +62,7 @@ set(DEPENDENCIES
   usr_msgs
   visualization_msgs
   detection_msgs
+  shm_ros
 )
 
 set(executable_name snapshotter)

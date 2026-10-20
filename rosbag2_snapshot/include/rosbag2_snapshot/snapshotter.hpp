@@ -93,6 +93,9 @@ struct TopicDetails
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
+  // shm_ros/msg/ShmImage entry: subscribed as ShmImage (the launch remaps the topic to its ring), buffered and
+  // saved as sensor_msgs/msg/Image under the same name
+  bool is_shm = false;
 
   TopicDetails() {}
 
@@ -225,7 +228,7 @@ private:
   typedef std::deque<SnapshotMessage> queue_t;
   queue_t queue_;
   // Subscriber to the callback which uses this queue
-  std::shared_ptr<rclcpp::GenericSubscription> sub_;
+  std::shared_ptr<rclcpp::SubscriptionBase> sub_;
 
 public:
   explicit MessageQueue(const SnapshotterTopicOptions & options, const rclcpp::Logger & logger);
@@ -239,7 +242,7 @@ public:
   // Clear internal buffer
   void clear();
   // Store the subscriber for this topic's queue internaly so it is not deleted
-  void setSubscriber(std::shared_ptr<rclcpp::GenericSubscription> sub);
+  void setSubscriber(std::shared_ptr<rclcpp::SubscriptionBase> sub);
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints

@@ -30,6 +30,8 @@
 #include <rcpputils/scope_exit.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
+#include <shm_ros/msg/shm_image.hpp>
+#include <shm_ros/segment.hpp>
 
 #include <filesystem>
 
@@ -252,7 +254,7 @@ MessageQueue::MessageQueue(const SnapshotterTopicOptions & options, const rclcpp
 {
 }
 
-void MessageQueue::setSubscriber(shared_ptr<rclcpp::GenericSubscription> sub)
+void MessageQueue::setSubscriber(shared_ptr<rclcpp::SubscriptionBase> sub)
 {
   sub_ = sub;
 }
@@ -538,6 +540,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.pc_compression_opts_ = pair.first.pc_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
     details.h264_throttle_skip = pair.first.h264_throttle_skip;
+    details.is_shm = pair.first.is_shm;
     std::pair<buffers_t::iterator, bool> res =
       buffers_.emplace(details, queue);
     assert(res.second);
@@ -748,6 +751,11 @@ void Snapshotter::parseOptionsFromParams()
         throw ex;
       }
 
+      const bool is_shm = topic_type == "shm_ros/msg/ShmImage";
+      if (is_shm) {
+        topic_type = "sensor_msgs/msg/Image";
+      }
+
       if(topic_type == "sensor_msgs/msg/Image")
       {
         img_compression_opts = getCompressionOptions(topic);
@@ -872,6 +880,7 @@ void Snapshotter::parseOptionsFromParams()
       TopicDetails dets{};
       dets.name = topic;
       dets.type = topic_type;
+      dets.is_shm = is_shm;
       dets.qos = qos_string_to_qos(topic_qos);
       dets.override_old_timestamps = override_old_timestamps;
       dets.queue_depth = queue_depth;
@@ -967,6 +976,36 @@ void Snapshotter::subscribe(
   std::shared_ptr<MessageQueue> queue)
 {
   RCLCPP_DEBUG(get_logger(), "Subscribing to %s", topic_details.name.c_str());
+
+  if (topic_details.is_shm) {
+    // Sensor data QoS matches the shm_ros announcers whatever QoS the raw topic is configured with
+    auto shm_sub = create_subscription<shm_ros::msg::ShmImage>(
+      topic_details.name, rclcpp::SensorDataQoS(),
+      [this, queue, reader = std::make_shared<shm_ros::ImageReader>(topic_details.name)](
+        const shm_ros::msg::ShmImage::ConstSharedPtr msg) {
+        const uint8_t * pixels = reader->frame_from(*msg);
+        if (pixels == nullptr) {
+          RCLCPP_ERROR_ONCE(get_logger(), "Cannot read shm frame: %s", reader->last_error().c_str());
+          return;
+        }
+        // Copy out of the ring (it has no locking) into the same serialized Image the raw topic gives
+        sensor_msgs::msg::Image image;
+        image.header = msg->header;
+        image.height = msg->height;
+        image.width = msg->width;
+        image.encoding = msg->encoding;
+        image.step = msg->step;
+        image.data.assign(pixels, pixels + static_cast<size_t>(msg->step) * msg->height);
+        static const rclcpp::Serialization<sensor_msgs::msg::Image> serializer;
+        auto serialized = std::make_shared<rclcpp::SerializedMessage>();
+        serializer.serialize_message(&image, serialized.get());
+        topicCb(serialized, queue);
+      });
+    RCLCPP_INFO(get_logger(), "Buffering %s from shared memory (%s)", topic_details.name.c_str(),
+      shm_sub->get_topic_name());
+    queue->setSubscriber(shm_sub);
+    return;
+  }
 
   auto opts = rclcpp::SubscriptionOptions{};
   opts.topic_stats_options.state = rclcpp::TopicStatisticsState::Enable;

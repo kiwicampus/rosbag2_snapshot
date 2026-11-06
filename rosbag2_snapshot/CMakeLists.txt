@@ -77,6 +77,13 @@ add_library(${library_name} SHARED
   src/snapshotter.cpp
 )
 
+# Jazzy renamed SerializedBagMessage::time_stamp to recv_timestamp
+if("$ENV{ROS_DISTRO}" STREQUAL "jazzy")
+  target_compile_definitions(${library_name} PRIVATE BAG_MSG_STAMP=recv_timestamp)
+else()
+  target_compile_definitions(${library_name} PRIVATE BAG_MSG_STAMP=time_stamp)
+endif()
+
 add_library(encoder SHARED
   src/ffmpeg_encoding/ffmpeg_encoder.cpp
   src/ffmpeg_encoding/tdiff.cpp

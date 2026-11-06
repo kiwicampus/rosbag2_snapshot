@@ -1090,7 +1090,7 @@ bool Snapshotter::writeTopic(
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     // Create BAG message
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
-    auto ret = rcutils_system_time_now(&bag_message->recv_timestamp);
+    auto ret = rcutils_system_time_now(&bag_message->BAG_MSG_STAMP);
     if (ret != RCL_RET_OK) {
       RCLCPP_ERROR(get_logger(), "Failed to assign time to rosbag message.");
       return false;
@@ -1115,11 +1115,11 @@ bool Snapshotter::writeTopic(
     {
       // Put old messages at the beginning of the bag
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Overriding old timestamps for topic %s", tm.name.c_str());
-      bag_message->recv_timestamp = req->start_time.sec*1e9 + req->start_time.nanosec;
+      bag_message->BAG_MSG_STAMP = req->start_time.sec*1e9 + req->start_time.nanosec;
     }
     else
     {
-      bag_message->recv_timestamp = msg_it->time.nanoseconds();
+      bag_message->BAG_MSG_STAMP = msg_it->time.nanoseconds();
     }
 
     if(use_cloudini)
@@ -1175,7 +1175,7 @@ bool Snapshotter::writeTopic(
         encoder->encodeImage(cv_img, raw_img.header, now());
         compressed_img = encoder->getCompressedImage();
         compressed_img.timestamp = raw_img.header.stamp;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->recv_timestamp));
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->BAG_MSG_STAMP));
       }
       else
       {
@@ -1183,7 +1183,7 @@ bool Snapshotter::writeTopic(
         cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
         compressed_img.format = topic_details.img_compression_opts_.format;
         compressed_img.header = raw_img.header;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->recv_timestamp));
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->BAG_MSG_STAMP));
       }
     }
     else

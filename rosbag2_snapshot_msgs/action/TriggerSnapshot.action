@@ -6,6 +6,8 @@ builtin_interfaces/Time start_time   # Earliest message to include. time(0) = ea
 builtin_interfaces/Time stop_time    # Latest message to include. time(0) = each topic's newest buffered message.
                                      # Topics with no age limit ignore it
 bool use_h264                        # Encode compression-enabled Image topics as h264 instead of jpg/png
+bool use_cloudini                    # Encode cloudini-enabled PointCloud2 topics with cloudini, written as
+                                     # point_cloud_interfaces/msg/CompressedPointCloud2. Ignored by builds without cloudini
 bool throttle_msgs                   # Apply each topic's configured throttle period; false = every message in range
 bool use_interval_mode               # Write [msg_timestamp - tolerance, msg_timestamp + tolerance]
                                      # instead of start_time/stop_time

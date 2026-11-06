@@ -53,6 +53,18 @@ else()
                    "building without H264 image compression (JPG/PNG still available)")
 endif()
 
+# Cloudini PointCloud2 compression needs cloudini_lib and point_cloud_interfaces
+# (CompressedPointCloud2); it is enabled only when both are found.
+find_package(cloudini_lib QUIET)
+find_package(point_cloud_interfaces QUIET)
+if(cloudini_lib_FOUND AND point_cloud_interfaces_FOUND)
+  set(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI TRUE)
+else()
+  set(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI FALSE)
+  message(WARNING "rosbag2_snapshot: cloudini_lib and/or point_cloud_interfaces not found; "
+                  "building without cloudini PointCloud2 compression")
+endif()
+
 include_directories(
   include
 )
@@ -76,6 +88,9 @@ set(DEPENDENCIES
 )
 if(ROSBAG2_SNAPSHOT_HAVE_H264)
   list(APPEND DEPENDENCIES foxglove_msgs)
+endif()
+if(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI)
+  list(APPEND DEPENDENCIES point_cloud_interfaces)
 endif()
 
 set(executable_name snapshotter)
@@ -111,8 +126,13 @@ if(ROSBAG2_SNAPSHOT_HAVE_H264)
   )
 endif()
 
+if(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI)
+  target_link_libraries(${library_name} cloudini_lib::cloudini_lib)
+endif()
+
 target_compile_definitions(${library_name} PUBLIC
   $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_H264}>:ROSBAG2_SNAPSHOT_HAVE_H264>
+  $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_CLOUDINI}>:ROSBAG2_SNAPSHOT_HAVE_CLOUDINI>
 )
 
 ament_target_dependencies(${library_name}

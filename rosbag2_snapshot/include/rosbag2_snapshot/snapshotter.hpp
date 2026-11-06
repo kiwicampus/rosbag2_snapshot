@@ -46,6 +46,7 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <cloudini_lib/ros_msg_utils.hpp>
 #include <chrono>
 #include <deque>
 #include <map>
@@ -78,6 +79,14 @@ struct ImageCompressionOptions
   std::shared_ptr<FFMPEGEncoder> encoder; // The encoder to use for video compression
 };
 
+/* Configuration for cloudini compression of a PointCloud2 topic
+ */
+struct PointcloudCompressionOptions
+{
+  bool use_compression = false; // whether to encode PointCloud2 messages with cloudini
+  double resolution = 0.001; // quantization resolution in meters for FLOAT32 fields
+};
+
 struct TopicDetails
 {
   std::string name;
@@ -89,10 +98,15 @@ struct TopicDetails
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
   // compression options for image topics;
   ImageCompressionOptions img_compression_opts_;
+  // compression options for PointCloud2 topics;
+  PointcloudCompressionOptions pc_compression_opts_;
   // max time between messages to save (in seconds)
   double throttle_period = -1.0;
   // If true and H264 enabled, throttle_period is ignored and all messages are saved
   bool h264_throttle_skip = false;
+  // shm_ros/msg/ShmImage entry: subscribed as ShmImage (the launch remaps the topic to its ring), buffered and
+  // saved as sensor_msgs/msg/Image under the same name
+  bool is_shm = false;
 
   TopicDetails() {}
 
@@ -225,7 +239,7 @@ private:
   typedef std::deque<SnapshotMessage> queue_t;
   queue_t queue_;
   // Subscriber to the callback which uses this queue
-  std::shared_ptr<rclcpp::GenericSubscription> sub_;
+  std::shared_ptr<rclcpp::SubscriptionBase> sub_;
 
 public:
   explicit MessageQueue(const SnapshotterTopicOptions & options, const rclcpp::Logger & logger);
@@ -239,7 +253,7 @@ public:
   // Clear internal buffer
   void clear();
   // Store the subscriber for this topic's queue internaly so it is not deleted
-  void setSubscriber(std::shared_ptr<rclcpp::GenericSubscription> sub);
+  void setSubscriber(std::shared_ptr<rclcpp::SubscriptionBase> sub);
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
   // Get a begin and end iterator into the buffer respecting the start and
   // end timestamp constraints
@@ -352,6 +366,8 @@ private:
 
   // Get the configuration of image compression for a given topic
   ImageCompressionOptions getCompressionOptions(std::string topic);
+  // Get the configuration of cloudini compression for a given PointCloud2 topic
+  PointcloudCompressionOptions getPointcloudCompressionOptions(std::string topic);
   // Iter through the message queue and write the messages to the bag
   void createBag(
     const std::shared_ptr<rclcpp_action::ServerGoalHandle<TriggerSnapAction>> goal_handle,

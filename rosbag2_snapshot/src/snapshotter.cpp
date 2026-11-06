@@ -36,6 +36,10 @@
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 #include <yaml-cpp/yaml.h>
+#ifdef ROSBAG2_SNAPSHOT_HAVE_SHM_ROS
+#include <shm_ros/msg/shm_image.hpp>
+#include <shm_ros/segment.hpp>
+#endif
 
 #include <filesystem>
 #include <fstream>
@@ -481,7 +485,7 @@ MessageQueue::MessageQueue(
 {
 }
 
-void MessageQueue::setSubscriber(shared_ptr<rclcpp::GenericSubscription> sub)
+void MessageQueue::setSubscriber(shared_ptr<rclcpp::SubscriptionBase> sub)
 {
   sub_ = sub;
 }
@@ -769,6 +773,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.img_compression_opts_ = pair.first.img_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
     details.h264_throttle_skip = pair.first.h264_throttle_skip;
+    details.is_shm = pair.first.is_shm;
     {
       std::unique_lock<std::shared_mutex> write_lock(buffers_lock_);
       std::pair<buffers_t::iterator, bool> res =
@@ -1002,6 +1007,19 @@ void Snapshotter::parseOptionsFromParams()
         throw ex;
       }
 
+      const bool is_shm = topic_type == "shm_ros/msg/ShmImage";
+      if (is_shm) {
+#ifdef ROSBAG2_SNAPSHOT_HAVE_SHM_ROS
+        topic_type = "sensor_msgs/msg/Image";
+#else
+        RCLCPP_ERROR(
+          get_logger(),
+          "Topic %s is shm_ros/msg/ShmImage but this build has no shm_ros support; not buffering it",
+          topic.c_str());
+        continue;
+#endif
+      }
+
       if(topic_type == "sensor_msgs/msg/Image")
       {
         img_compression_opts = getCompressionOptions(topic);
@@ -1122,6 +1140,7 @@ void Snapshotter::parseOptionsFromParams()
       TopicDetails dets{};
       dets.name = topic;
       dets.type = topic_type;
+      dets.is_shm = is_shm;
       dets.qos = qos_string_to_qos(topic_qos);
       dets.override_old_timestamps = override_old_timestamps;
       dets.queue_depth = queue_depth;
@@ -1243,6 +1262,47 @@ void Snapshotter::subscribe(
   std::shared_ptr<MessageQueue> queue)
 {
   RCLCPP_DEBUG(get_logger(), "Subscribing to %s", topic_details.name.c_str());
+
+#ifdef ROSBAG2_SNAPSHOT_HAVE_SHM_ROS
+  if (topic_details.is_shm) {
+    // Sensor data QoS matches the shm_ros announcers whatever QoS the raw topic is configured with
+    auto shm_sub = create_subscription<shm_ros::msg::ShmImage>(
+      topic_details.name, rclcpp::SensorDataQoS(),
+      [this, queue, reader = std::make_shared<shm_ros::ImageReader>(topic_details.name)](
+        const shm_ros::msg::ShmImage::ConstSharedPtr msg) {
+        const uint8_t * pixels = reader->frame_from(*msg);
+        if (pixels == nullptr) {
+          RCLCPP_ERROR_ONCE(get_logger(), "Cannot read shm frame: %s", reader->last_error().c_str());
+          return;
+        }
+        // Copy out of the ring (it has no locking) into the same serialized Image the raw topic gives
+        sensor_msgs::msg::Image image;
+        image.header = msg->header;
+        image.height = msg->height;
+        image.width = msg->width;
+        image.encoding = msg->encoding;
+        image.step = msg->step;
+        image.data.assign(pixels, pixels + static_cast<size_t>(msg->step) * msg->height);
+        // The writer may have lapped the ring and reused this block during the copy.
+        const auto & segment = reader->segment_reader();
+        if (shm_ros::block_overwritten(segment.writes_started(), msg->seq, segment.block_num())) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Dropping shm frame %lu on %s: overwritten while it was copied",
+            static_cast<unsigned long>(msg->seq), msg->segment.c_str());
+          return;
+        }
+        static const rclcpp::Serialization<sensor_msgs::msg::Image> serializer;
+        auto serialized = std::make_shared<rclcpp::SerializedMessage>();
+        serializer.serialize_message(&image, serialized.get());
+        topicCb(serialized, queue);
+      });
+    RCLCPP_INFO(get_logger(), "Buffering %s from shared memory (%s)", topic_details.name.c_str(),
+      shm_sub->get_topic_name());
+    queue->setSubscriber(shm_sub);
+    return;
+  }
+#endif
 
   auto opts = rclcpp::SubscriptionOptions{};
   opts.topic_stats_options.state = rclcpp::TopicStatisticsState::Enable;

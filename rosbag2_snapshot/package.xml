@@ -28,6 +28,8 @@
   <depend>visualization_msgs</depend>
   <depend>rosbag2_transport</depend>
   <depend>yaml-cpp</depend>
+  <!-- Optional: ShmImage buffering is built only when it is found -->
+  <depend>shm_ros</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -112,6 +112,9 @@ struct TopicDetails
   bool h264_throttle_skip = false;
   // In a forward capture, whether arrivals after the trigger are included.
   bool include_post_trigger = true;
+  // shm_ros/msg/ShmImage entry: subscribed as ShmImage (the launch remaps the topic to its ring),
+  // buffered and saved as sensor_msgs/msg/Image under the same name. shm_ros builds only.
+  bool is_shm = false;
 
   TopicDetails() {}
 
@@ -264,7 +267,7 @@ private:
   int64_t size_;  // current total size of queue_, in bytes
   typedef std::deque<SnapshotMessage> queue_t;
   queue_t queue_;
-  std::shared_ptr<rclcpp::GenericSubscription> sub_;
+  std::shared_ptr<rclcpp::SubscriptionBase> sub_;
   // Not owned; null for a clone() (never pushed to).
   SharedMemoryBudget * shared_budget_{nullptr};
   // Forward-capture clones that receive every message this queue stores.
@@ -281,7 +284,7 @@ public:
   rclcpp::Duration duration() const;
   void clear();
   // Keeps the subscription alive for as long as this queue exists.
-  void setSubscriber(std::shared_ptr<rclcpp::GenericSubscription> sub);
+  void setSubscriber(std::shared_ptr<rclcpp::SubscriptionBase> sub);
   typedef std::pair<queue_t::const_iterator, queue_t::const_iterator> range_t;
   // [start, end] window into the buffer.
   range_t rangeFromTimes(const rclcpp::Time & start, const rclcpp::Time & end, int old_messages_to_keep = -1);

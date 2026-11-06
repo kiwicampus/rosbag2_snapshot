@@ -63,6 +63,9 @@
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
 #include "rosbag2_snapshot/ffmpeg_encoding/ffmpeg_encoder.hpp"
 #endif
+#ifdef ROSBAG2_SNAPSHOT_HAVE_CLOUDINI
+#include <cloudini_lib/ros_msg_utils.hpp>
+#endif
 #include "rosbag2_snapshot/accepted_filename.hpp"
 #include "rosbag2_snapshot/capture_content.hpp"
 #include "rosbag2_snapshot/capture_profiles.hpp"
@@ -97,6 +100,13 @@ struct ImageCompressionOptions
 #endif
 };
 
+// Cloudini compression settings for a single PointCloud2 topic.
+struct PointcloudCompressionOptions
+{
+  bool use_compression = false;  // whether to encode PointCloud2 messages with cloudini
+  double resolution = 0.001;  // quantization resolution in meters for FLOAT32 fields
+};
+
 struct TopicDetails
 {
   std::string name;
@@ -107,6 +117,7 @@ struct TopicDetails
   int old_messages_to_keep = -1;
   rclcpp::Duration default_bag_duration = rclcpp::Duration(0, 0);
   ImageCompressionOptions img_compression_opts_;
+  PointcloudCompressionOptions pc_compression_opts_;
   double throttle_period = -1.0;  // min seconds between saved messages
   // If true (and H264 enabled), throttle_period is ignored and every message is saved.
   bool h264_throttle_skip = false;
@@ -462,6 +473,8 @@ private:
   void overrideTopicDetails(const DetailsMsg& topic, TopicDetails& details);
 
   ImageCompressionOptions getCompressionOptions(std::string topic);
+  // Get the configuration of cloudini compression for a given PointCloud2 topic
+  PointcloudCompressionOptions getPointcloudCompressionOptions(std::string topic);
 
   // Topics a goal writes: the named req->profile's topics (with its per-topic
   // overrides), otherwise req->topics as-is. Empty means every buffered topic.

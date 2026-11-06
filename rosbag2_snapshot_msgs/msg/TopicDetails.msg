@@ -14,4 +14,7 @@ string format ""            # jpg, jpeg, png or h264; any other value disables c
 int32 jpg_quality -1        # 0-100, read only with format jpg/jpeg
 int32 png_compression -1    # 0-9, read only with format png
 
+int8 use_cloudini -1              # (int-bool) Encode this PointCloud2 topic with cloudini (needs the goal's use_cloudini)
+float32 cloudini_resolution -1.0  # Quantization resolution in meters for float fields. Max error is half of it
+
 int8 include_post_trigger -1  # (int-bool) In a forward capture, include arrivals after the trigger

@@ -12,6 +12,7 @@ Features:
 - Forward captures that also include messages arriving after the trigger
 - Time-window and interval selection, throttling and per-topic queue depth
 - JPG/PNG image compression, and H264 when built with FFmpeg
+- Cloudini PointCloud2 compression when built with `cloudini_lib`
 - A state topic and one event per finished capture
 
 Setup, a minimal example, the full configuration reference and operational

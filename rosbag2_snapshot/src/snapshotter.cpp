@@ -32,7 +32,7 @@
 #include <rosbag2_cpp/typesupport_helpers.hpp>
 #include <rosbag2_snapshot/snapshotter.hpp>
 #include <rosbag2_snapshot/timestamp_override.hpp>
-#include <rosbag2_transport/qos.hpp>
+#include "rosbag2_snapshot/rosbag2_compat.hpp"
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 #include <yaml-cpp/yaml.h>
@@ -105,16 +105,23 @@ bool builtin_time_equal(const builtin_interfaces::msg::Time & a, const builtin_i
   return a.sec == b.sec && a.nanosec == b.nanosec;
 }
 
-// rosbag2 stores offered_qos_profiles as a YAML sequence of QoS profiles.
+#ifdef ROSBAG2_SNAPSHOT_JAZZY_API
+// Jazzy stores offered_qos_profiles as a list of QoS profiles.
+std::vector<rclcpp::QoS> encodeQos(const rclcpp::QoS & qos)
+{
+  return {qos};
+}
+#else
+// Iron stores offered_qos_profiles as a YAML sequence of QoS profiles.
 std::string encodeQos(const rclcpp::QoS & qos)
 {
   YAML::Node sequence;
-  sequence.push_back(
-    YAML::convert<rosbag2_transport::Rosbag2QoS>::encode(rosbag2_transport::Rosbag2QoS(qos)));
+  sequence.push_back(YAML::convert<Rosbag2QoS>::encode(Rosbag2QoS(qos)));
   std::ostringstream out;
   out << sequence;
   return out.str();
 }
+#endif
 
 // Writer::open() always produces a directory (<uri>/<uri>_0.mcap plus a
 // metadata.yaml); only the .mcap is useful standalone.
@@ -1357,7 +1364,9 @@ void Snapshotter::subscribe(
     topic_details.name,
     topic_details.type,
     topic_details.qos,
-    std::bind(&Snapshotter::topicCb, this, _1, queue),
+    [this, queue](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
+      topicCb(msg, queue);
+    },
     opts
   );
 
@@ -1520,7 +1529,7 @@ bool Snapshotter::writeTopic(
   bool logged_timestamp_override = false;
   for (auto msg_it = range.first; msg_it != range.second; ++msg_it) {
     auto bag_message = std::make_shared<rosbag2_storage::SerializedBagMessage>();
-    auto ret = rcutils_system_time_now(&bag_message->time_stamp);
+    auto ret = rcutils_system_time_now(&bag_message->ROSBAG2_SNAPSHOT_BAG_MSG_STAMP);
     if (ret != RCL_RET_OK) {
       RCLCPP_ERROR(get_logger(), "Failed to assign time to rosbag message.");
       return false;
@@ -1549,11 +1558,11 @@ bool Snapshotter::writeTopic(
         RCLCPP_WARN(get_logger(), "Overriding old timestamps for topic %s", tm.name.c_str());
         logged_timestamp_override = true;
       }
-      bag_message->time_stamp = rclcpp::Time(req->start_time).nanoseconds();
+      bag_message->ROSBAG2_SNAPSHOT_BAG_MSG_STAMP = rclcpp::Time(req->start_time).nanoseconds();
     }
     else
     {
-      bag_message->time_stamp = msg_it->time.nanoseconds();
+      bag_message->ROSBAG2_SNAPSHOT_BAG_MSG_STAMP = msg_it->time.nanoseconds();
     }
 
 #ifdef ROSBAG2_SNAPSHOT_HAVE_CLOUDINI
@@ -1622,7 +1631,7 @@ bool Snapshotter::writeTopic(
         if (capture_encoder->takeCompressedImage(compressed_img))
         {
           compressed_img.timestamp = raw_img.header.stamp;
-          bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+          bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->ROSBAG2_SNAPSHOT_BAG_MSG_STAMP));
           if (content != nullptr) {
             content->recordMessage(tm.name, msg_it->time.nanoseconds());
           }
@@ -1639,7 +1648,7 @@ bool Snapshotter::writeTopic(
         cv::imencode("." + topic_details.img_compression_opts_.format, cv_img, compressed_img.data, compression_params);
         compressed_img.format = topic_details.img_compression_opts_.format;
         compressed_img.header = raw_img.header;
-        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->time_stamp));
+        bag_writer.write(compressed_img, tm.name, rclcpp::Time(bag_message->ROSBAG2_SNAPSHOT_BAG_MSG_STAMP));
         if (content != nullptr) {
           content->recordMessage(tm.name, msg_it->time.nanoseconds());
         }

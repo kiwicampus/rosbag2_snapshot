@@ -27,6 +27,7 @@
   <depend>rosidl_typesupport_introspection_cpp</depend>
   <depend>visualization_msgs</depend>
   <depend>rosbag2_transport</depend>
+  <depend>rosbag2_storage</depend>
   <depend>yaml-cpp</depend>
   <!-- Optional: cloudini PointCloud2 compression is built only when both are found -->
   <depend>cloudini_lib</depend>

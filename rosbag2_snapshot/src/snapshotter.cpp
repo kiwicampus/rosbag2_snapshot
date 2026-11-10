@@ -771,6 +771,7 @@ Snapshotter::Snapshotter(const rclcpp::NodeOptions & options)
     details.queue_depth = pair.first.queue_depth;
     details.default_bag_duration = pair.first.default_bag_duration;
     details.img_compression_opts_ = pair.first.img_compression_opts_;
+    details.pc_compression_opts_ = pair.first.pc_compression_opts_;
     details.throttle_period = pair.first.throttle_period;
     details.h264_throttle_skip = pair.first.h264_throttle_skip;
     details.is_shm = pair.first.is_shm;
@@ -822,6 +823,39 @@ Snapshotter::~Snapshotter()
   for (auto & buffer : buffers_) {
     buffer.second->sub_.reset();
   }
+}
+
+PointcloudCompressionOptions Snapshotter::getPointcloudCompressionOptions(std::string topic)
+{
+  std::string prefix = "topic_details." + topic;
+  PointcloudCompressionOptions pc_compression_opts;
+
+  try {
+    pc_compression_opts.use_compression = declare_parameter<bool>(prefix + ".cloudini.enabled");
+  } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+    RCLCPP_DEBUG(get_logger(), "Not using cloudini compression for topic %s", topic.c_str());
+    pc_compression_opts.use_compression = false;
+    return pc_compression_opts;
+  }
+
+  if (pc_compression_opts.use_compression) {
+    try {
+      pc_compression_opts.resolution = declare_parameter<double>(prefix + ".cloudini.resolution");
+    } catch (const rclcpp::exceptions::UninitializedStaticallyTypedParameterException&) {
+      RCLCPP_DEBUG(
+        get_logger(), "Cloudini enabled for topic %s but resolution not specified, using %f m",
+        topic.c_str(), pc_compression_opts.resolution);
+    }
+#ifndef ROSBAG2_SNAPSHOT_HAVE_CLOUDINI
+    RCLCPP_WARN(
+      get_logger(),
+      "topic_details.%s.cloudini.enabled is set but this build has no cloudini_lib/"
+      "point_cloud_interfaces support; the topic will be recorded uncompressed",
+      topic.c_str());
+#endif
+  }
+
+  return pc_compression_opts;
 }
 
 ImageCompressionOptions Snapshotter::getCompressionOptions(std::string topic)
@@ -989,6 +1023,7 @@ void Snapshotter::parseOptionsFromParams()
       std::string topic_type{};
       SnapshotterTopicOptions opts{};
       ImageCompressionOptions img_compression_opts;
+      PointcloudCompressionOptions pc_compression_opts;
       std::string topic_qos{};
       bool override_old_timestamps;
       int queue_depth = -1;
@@ -1023,6 +1058,10 @@ void Snapshotter::parseOptionsFromParams()
       if(topic_type == "sensor_msgs/msg/Image")
       {
         img_compression_opts = getCompressionOptions(topic);
+      }
+      else if(topic_type == "sensor_msgs/msg/PointCloud2")
+      {
+        pc_compression_opts = getPointcloudCompressionOptions(topic);
       }
 
       try
@@ -1146,6 +1185,7 @@ void Snapshotter::parseOptionsFromParams()
       dets.queue_depth = queue_depth;
       dets.old_messages_to_keep = old_messages_to_keep;
       dets.img_compression_opts_ = img_compression_opts;
+      dets.pc_compression_opts_ = pc_compression_opts;
       dets.default_bag_duration = options_.default_duration_limit_;
       dets.throttle_period = throttle_period;
       dets.h264_throttle_skip = h264_throttle_skip;
@@ -1168,6 +1208,11 @@ void Snapshotter::parseOptionsFromParams()
       if(dets.img_compression_opts_.use_compression)
       {
         RCLCPP_DEBUG(get_logger(), "compression: %i for topic %s using format %s and compression flag %i", dets.img_compression_opts_.use_compression, topic.c_str(), dets.img_compression_opts_.format.c_str(), dets.img_compression_opts_.imwrite_flag_value);
+      }
+
+      if(dets.pc_compression_opts_.use_compression)
+      {
+        RCLCPP_DEBUG(get_logger(), "cloudini compression enabled for topic %s using resolution %f m", topic.c_str(), dets.pc_compression_opts_.resolution);
       }
 
       if(dets.throttle_period > 0.0)
@@ -1379,6 +1424,29 @@ bool Snapshotter::writeTopic(
 #else
   const bool use_h264 = req->use_h264 || topic_details.img_compression_opts_.h264;
 #endif
+  // Cloudini applies only when the goal asks for it and the topic enables it.
+  const bool wants_cloudini = req->use_cloudini &&
+    topic_details.pc_compression_opts_.use_compression &&
+    topic_details.type == "sensor_msgs/msg/PointCloud2";
+#ifdef ROSBAG2_SNAPSHOT_HAVE_CLOUDINI
+  const bool use_cloudini = wants_cloudini;
+  if (use_cloudini)
+  {
+    RCLCPP_DEBUG(
+      get_logger(), "topic %s is a pointcloud. applying cloudini compression (resolution=%f m)",
+      topic_details.name.c_str(), topic_details.pc_compression_opts_.resolution);
+    tm.type = "point_cloud_interfaces/msg/CompressedPointCloud2";
+  }
+#else
+  if (wants_cloudini)
+  {
+    RCLCPP_WARN(
+      get_logger(),
+      "Cloudini requested for topic %s but this build has no cloudini_lib/point_cloud_interfaces "
+      "support; recording it uncompressed",
+      topic_details.name.c_str());
+  }
+#endif
   if(compress)
   {
 #ifdef ROSBAG2_SNAPSHOT_HAVE_H264
@@ -1488,6 +1556,37 @@ bool Snapshotter::writeTopic(
       bag_message->time_stamp = msg_it->time.nanoseconds();
     }
 
+#ifdef ROSBAG2_SNAPSHOT_HAVE_CLOUDINI
+    if(use_cloudini)
+    {
+      const auto& raw_msg = msg_it->msg->get_rcl_serialized_message();
+      Cloudini::ConstBufferView raw_view(raw_msg.buffer, raw_msg.buffer_length);
+      auto pc_info = cloudini_ros::getDeserializedPointCloudMessage(raw_view);
+      auto encoding_info = cloudini_ros::toEncodingInfo(pc_info);
+      cloudini_ros::applyResolutionProfile(
+        {}, encoding_info.fields, static_cast<float>(topic_details.pc_compression_opts_.resolution));
+      // mcap already zstd-compresses chunks, no need to do it twice
+      encoding_info.compression_opt = Cloudini::CompressionOption::NONE;
+
+      // Owned by the bag message, so it stays valid however long the writer holds it.
+      auto compressed_dds_msg = std::make_shared<std::vector<uint8_t>>();
+      cloudini_ros::convertPointCloud2ToCompressedCloud(pc_info, encoding_info, *compressed_dds_msg);
+
+      auto serialized_array = std::shared_ptr<rcutils_uint8_array_t>(
+        new rcutils_uint8_array_t(rcutils_get_zero_initialized_uint8_array()),
+        [compressed_dds_msg](rcutils_uint8_array_t * array) {delete array;});
+      serialized_array->buffer = compressed_dds_msg->data();
+      serialized_array->buffer_length = compressed_dds_msg->size();
+      serialized_array->buffer_capacity = compressed_dds_msg->capacity();
+      serialized_array->allocator = rcutils_get_default_allocator();
+      bag_message->serialized_data = serialized_array;
+      bag_writer.write(bag_message);
+      if (content != nullptr) {
+        content->recordMessage(tm.name, msg_it->time.nanoseconds());
+      }
+    }
+    else
+#endif
     if(compress)
     {
       cv::Mat cv_img;
@@ -2101,6 +2200,9 @@ void Snapshotter::overrideTopicDetails(const DetailsMsg& req_msg, TopicDetails& 
     RCLCPP_WARN(get_logger(), "Invalid format to override compression: %s", req_msg.format.c_str());
   }
 
+  // Cloudini pointcloud compression
+  if (req_msg.use_cloudini != -1) details.pc_compression_opts_.use_compression = req_msg.use_cloudini;
+  if (req_msg.cloudini_resolution != -1.0) details.pc_compression_opts_.resolution = req_msg.cloudini_resolution;
 }
 
 bool applyCompressionOverride(const DetailsMsg & req_msg, ImageCompressionOptions & opts)

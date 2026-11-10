@@ -17,6 +17,7 @@ bag when a `TriggerSnapshot` goal arrives. The interfaces are listed in the
 | `pkg-config` | Required by CMake, with or without H264 |
 | `foxglove_msgs` | H264 output type. Listed in `package.xml`, so rosdep installs it |
 | FFmpeg development libraries (`libavcodec-dev`, `libavutil-dev`, `libswscale-dev`, `libswresample-dev`) | H264 only. Not in `package.xml`: rosdep does not install them. The default encoder needs an FFmpeg built with `libx264` |
+| `cloudini_lib`, `point_cloud_interfaces` | Cloudini PointCloud2 compression only. `point_cloud_interfaces` is a rosdep key; `cloudini_lib` is built from source ([cloudini](https://github.com/facontidavide/cloudini)) |
 | `shm_ros` | `shm_ros/msg/ShmImage` buffering only. Built from source ([shm_ros](https://github.com/kiwicampus/shm_ros)); needs a version with `SegmentReader::writes_started()` (`feature/stonks`, `c1c5630` or later) |
 
 ## Build
@@ -36,6 +37,10 @@ colcon build --symlink-install --packages-up-to rosbag2_snapshot \
   --cmake-args -DFFMPEG_PKGCONFIG=/opt/ffmpeg/lib/pkgconfig
 ```
 
+Cloudini is built only when CMake finds both `cloudini_lib` and
+`point_cloud_interfaces`; otherwise it prints a warning and builds without it.
+The `cloudini.*` keys and the `use_cloudini` fields exist in every build; a
+build without cloudini writes those topics uncompressed and logs a warning.
 `shm_ros/msg/ShmImage` buffering is built only when CMake finds `shm_ros`;
 otherwise it prints a warning, and a `ShmImage` topic is logged as an error and
 not buffered.
@@ -125,8 +130,13 @@ Only topics listed in `topics` read these keys.
 | `compression.format` | string | `jpg` | `jpg`, `jpeg` or `png`. Any other value, `h264` included, disables compression with an error |
 | `compression.jpg_quality` | int | `95` | 0 to 100 |
 | `compression.png_compression` | int | `3` | 0 to 9 |
+| `cloudini.enabled` | bool | `false` | Allow cloudini compression for this topic. Read for `sensor_msgs/msg/PointCloud2` topics only |
+| `cloudini.resolution` | double | `0.001` | Quantization step for float fields, metres. Maximum error is half of it |
 
-A compressed topic is written as `sensor_msgs/msg/CompressedImage`.
+A compressed topic is written as `sensor_msgs/msg/CompressedImage`. A
+cloudini topic is compressed only when the goal also sets `use_cloudini`, and
+is then written as `point_cloud_interfaces/msg/CompressedPointCloud2`. Its
+points are only quantized; the MCAP storage preset does the byte compression.
 
 A topic with `type: shm_ros/msg/ShmImage` is subscribed as `ShmImage` with
 sensor-data QoS, and each announced frame is copied out of shared memory. It is
@@ -273,6 +283,7 @@ Send a `trigger_snapshot` goal. Every field is optional except `filename`.
 | `post_duration_s` | `0.0` | `> 0` makes a [forward capture](#forward-captures) |
 | `throttle_msgs` | `false` | Apply each topic's `throttle_period`. A profile's `max_rate_hz` applies regardless. Neither applies in interval mode |
 | `use_h264` | `false` | Write compressed image topics as H264 |
+| `use_cloudini` | `false` | Write cloudini-enabled PointCloud2 topics as `CompressedPointCloud2` |
 | `rosbag_preset_profile` | `""` | MCAP storage preset (`none`, `fastwrite`, `zstd_fast`, `zstd_small`). Empty = the node parameter |
 | `use_interval_mode` | `false` | Write `[msg_timestamp - interval_mode_tolerance, msg_timestamp + interval_mode_tolerance]` instead of `start_time`/`stop_time` |
 | `msg_timestamp` | `0` | Interval center |
@@ -302,6 +313,8 @@ capture. Entries are matched by `name`; `type` is ignored. A field left at
 | `format` | string | `""` | `jpg`, `jpeg`, `png` or `h264`. Any other value disables compression with a warning |
 | `jpg_quality` | int32 | `-1` | 0 to 100. Read only with `format: jpg` or `jpeg` in the same entry |
 | `png_compression` | int32 | `-1` | 0 to 9. Read only with `format: png` in the same entry |
+| `use_cloudini` | int8 | `-1` | `0` or `1`. Still needs the goal's `use_cloudini` |
+| `cloudini_resolution` | float32 | `-1.0` | Metres |
 | `include_post_trigger` | int8 | `-1` | `0` or `1` |
 
 Changing `format` without the matching quality field keeps the topic's current

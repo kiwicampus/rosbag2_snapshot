@@ -28,6 +28,9 @@
   <depend>visualization_msgs</depend>
   <depend>rosbag2_transport</depend>
   <depend>yaml-cpp</depend>
+  <!-- Optional: cloudini PointCloud2 compression is built only when both are found -->
+  <depend>cloudini_lib</depend>
+  <depend>point_cloud_interfaces</depend>
   <!-- Optional: ShmImage buffering is built only when it is found -->
   <depend>shm_ros</depend>
 

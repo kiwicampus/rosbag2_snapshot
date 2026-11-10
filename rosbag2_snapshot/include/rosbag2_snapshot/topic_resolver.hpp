@@ -24,7 +24,7 @@ public:
   bool resolveType(const std::string & topic_name, std::string & type_out) const;
 
   // QoS adapted to the current publishers' offers
-  // (rosbag2_transport::Rosbag2QoS::adapt_request_to_offers, as
+  // (Rosbag2QoS::adapt_request_to_offers, as
   // `ros2 bag record` does), so a BEST_EFFORT publisher is still matched.
   // False if there is no publisher yet.
   bool resolveQos(const std::string & topic_name, rclcpp::QoS & qos_out) const;

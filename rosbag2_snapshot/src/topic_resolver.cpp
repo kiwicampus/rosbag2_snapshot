@@ -1,6 +1,6 @@
 #include "rosbag2_snapshot/topic_resolver.hpp"
 
-#include <rosbag2_transport/qos.hpp>
+#include "rosbag2_snapshot/rosbag2_compat.hpp"
 
 namespace rosbag2_snapshot
 {
@@ -35,7 +35,7 @@ bool TopicResolver::resolveQos(const std::string & topic_name, rclcpp::QoS & qos
     return false;
   }
 
-  qos_out = rosbag2_transport::Rosbag2QoS::adapt_request_to_offers(topic_name, endpoints);
+  qos_out = Rosbag2QoS::adapt_request_to_offers(topic_name, endpoints);
   return true;
 }
 

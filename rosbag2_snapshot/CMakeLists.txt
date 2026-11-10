@@ -28,6 +28,18 @@ find_package(cv_bridge REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosbag2_transport REQUIRED)
+find_package(rosbag2_storage REQUIRED)
+
+# rosbag2 0.26 (Jazzy) moved Rosbag2QoS from rosbag2_transport to
+# rosbag2_storage, renamed SerializedBagMessage::time_stamp to recv_timestamp
+# and turned TopicMetadata::offered_qos_profiles into std::vector<rclcpp::QoS>.
+# Iron ships rosbag2 0.22.
+if(rosbag2_storage_VERSION VERSION_GREATER_EQUAL "0.26.0")
+  set(ROSBAG2_SNAPSHOT_JAZZY_API TRUE)
+else()
+  set(ROSBAG2_SNAPSHOT_JAZZY_API FALSE)
+endif()
+message(STATUS "rosbag2_snapshot: rosbag2_storage ${rosbag2_storage_VERSION}, Jazzy API: ${ROSBAG2_SNAPSHOT_JAZZY_API}")
 find_package(yaml-cpp REQUIRED)
 
 if(FFMPEG_PKGCONFIG)
@@ -96,6 +108,7 @@ set(DEPENDENCIES
   rosidl_typesupport_introspection_cpp
   visualization_msgs
   rosbag2_transport
+  rosbag2_storage
 )
 if(ROSBAG2_SNAPSHOT_HAVE_H264)
   list(APPEND DEPENDENCIES foxglove_msgs)
@@ -148,6 +161,7 @@ target_compile_definitions(${library_name} PUBLIC
   $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_H264}>:ROSBAG2_SNAPSHOT_HAVE_H264>
   $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_CLOUDINI}>:ROSBAG2_SNAPSHOT_HAVE_CLOUDINI>
   $<$<BOOL:${ROSBAG2_SNAPSHOT_HAVE_SHM_ROS}>:ROSBAG2_SNAPSHOT_HAVE_SHM_ROS>
+  $<$<BOOL:${ROSBAG2_SNAPSHOT_JAZZY_API}>:ROSBAG2_SNAPSHOT_JAZZY_API>
 )
 
 ament_target_dependencies(${library_name}

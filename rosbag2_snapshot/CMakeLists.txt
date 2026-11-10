@@ -63,6 +63,8 @@ else()
   set(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI FALSE)
   message(WARNING "rosbag2_snapshot: cloudini_lib and/or point_cloud_interfaces not found; "
                   "building without cloudini PointCloud2 compression")
+endif()
+
 # Buffering shm_ros/msg/ShmImage topics (frames read from shared memory) needs
 # shm_ros; it is enabled only when shm_ros is found.
 find_package(shm_ros QUIET)
@@ -100,6 +102,7 @@ if(ROSBAG2_SNAPSHOT_HAVE_H264)
 endif()
 if(ROSBAG2_SNAPSHOT_HAVE_CLOUDINI)
   list(APPEND DEPENDENCIES point_cloud_interfaces)
+endif()
 if(ROSBAG2_SNAPSHOT_HAVE_SHM_ROS)
   list(APPEND DEPENDENCIES shm_ros)
 endif()

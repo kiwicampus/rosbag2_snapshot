@@ -41,6 +41,7 @@ Cloudini is built only when CMake finds both `cloudini_lib` and
 `point_cloud_interfaces`; otherwise it prints a warning and builds without it.
 The `cloudini.*` keys and the `use_cloudini` fields exist in every build; a
 build without cloudini writes those topics uncompressed and logs a warning.
+
 `shm_ros/msg/ShmImage` buffering is built only when CMake finds `shm_ros`;
 otherwise it prints a warning, and a `ShmImage` topic is logged as an error and
 not buffered.

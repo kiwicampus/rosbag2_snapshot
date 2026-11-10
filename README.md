@@ -13,6 +13,7 @@ Features:
 - Time-window and interval selection, throttling and per-topic queue depth
 - JPG/PNG image compression, and H264 when built with FFmpeg
 - Cloudini PointCloud2 compression when built with `cloudini_lib`
+- `shm_ros/msg/ShmImage` topics buffered from shared memory and saved as `sensor_msgs/msg/Image`, when built with `shm_ros`
 - A state topic and one event per finished capture
 
 Setup, a minimal example, the full configuration reference and operational

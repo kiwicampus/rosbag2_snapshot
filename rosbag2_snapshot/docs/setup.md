@@ -18,6 +18,7 @@ bag when a `TriggerSnapshot` goal arrives. The interfaces are listed in the
 | `foxglove_msgs` | H264 output type. Listed in `package.xml`, so rosdep installs it |
 | FFmpeg development libraries (`libavcodec-dev`, `libavutil-dev`, `libswscale-dev`, `libswresample-dev`) | H264 only. Not in `package.xml`: rosdep does not install them. The default encoder needs an FFmpeg built with `libx264` |
 | `cloudini_lib`, `point_cloud_interfaces` | Cloudini PointCloud2 compression only. `point_cloud_interfaces` is a rosdep key; `cloudini_lib` is built from source ([cloudini](https://github.com/facontidavide/cloudini)) |
+| `shm_ros` | `shm_ros/msg/ShmImage` buffering only. Built from source ([shm_ros](https://github.com/kiwicampus/shm_ros)); needs a version with `SegmentReader::writes_started()` (`feature/stonks`, `c1c5630` or later) |
 
 ## Build
 
@@ -40,6 +41,9 @@ Cloudini is built only when CMake finds both `cloudini_lib` and
 `point_cloud_interfaces`; otherwise it prints a warning and builds without it.
 The `cloudini.*` keys and the `use_cloudini` fields exist in every build; a
 build without cloudini writes those topics uncompressed and logs a warning.
+`shm_ros/msg/ShmImage` buffering is built only when CMake finds `shm_ros`;
+otherwise it prints a warning, and a `ShmImage` topic is logged as an error and
+not buffered.
 
 ## Minimal example
 
@@ -133,6 +137,13 @@ A compressed topic is written as `sensor_msgs/msg/CompressedImage`. A
 cloudini topic is compressed only when the goal also sets `use_cloudini`, and
 is then written as `point_cloud_interfaces/msg/CompressedPointCloud2`. Its
 points are only quantized; the MCAP storage preset does the byte compression.
+
+A topic with `type: shm_ros/msg/ShmImage` is subscribed as `ShmImage` with
+sensor-data QoS, and each announced frame is copied out of shared memory. It is
+buffered and written as `sensor_msgs/msg/Image` under the same name, so the
+image `compression.*` keys apply to it. Remap the topic to the `ShmImage`
+announcement topic when the two names differ. A frame the producer overwrote
+while it was being copied is dropped with a warning.
 `throttle_period`, `queue_depth` and `old_messages_to_keep` do not apply in
 interval mode.
 

@@ -31,6 +31,8 @@
   <!-- Optional: cloudini PointCloud2 compression is built only when both are found -->
   <depend>cloudini_lib</depend>
   <depend>point_cloud_interfaces</depend>
+  <!-- Optional: ShmImage buffering is built only when it is found -->
+  <depend>shm_ros</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
